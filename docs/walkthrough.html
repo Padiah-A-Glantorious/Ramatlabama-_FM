@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Ramatlabama FM — System Walkthrough</title>
+<style>
+  @page { size: A4; margin: 14mm 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; color: #1f1b12; margin: 0; font-size: 12px; line-height: 1.5; }
+  h1, h2, h3 { color: #6b5212; }
+
+  .cover {
+    text-align: center; padding: 80px 20px 70px;
+    background: linear-gradient(160deg,#1a1a1c,#121214); color: #f3eede; border-radius: 14px; margin-bottom: 26px;
+  }
+  .cover .logo { width: 96px; height: 96px; border-radius: 20px; object-fit: cover; margin-bottom: 18px; border: 2px solid #d4af37; }
+  .cover h1 { color: #f1cf72; font-size: 32px; margin: 0 0 6px; }
+  .cover p { color: #cbbf9c; margin: 4px 0; }
+
+  .part { background: #6b5212; color: #fff; padding: 9px 14px; border-radius: 8px; font-size: 15px; font-weight: 700; margin: 24px 0 16px; }
+  .lead { margin-bottom: 20px; }
+
+  /* Two-column screen: image left (big), text right */
+  .screen {
+    display: flex; gap: 20px; align-items: flex-start;
+    border: 1px solid #e3d9b8; border-radius: 12px; padding: 16px 18px; margin-bottom: 18px;
+    page-break-inside: avoid;
+  }
+  .screen .shot { flex: 0 0 300px; text-align: center; }
+  .screen .shot img { width: 300px; max-height: 560px; border: 1px solid #ccc; border-radius: 10px; }
+  .screen .shot .placeholder {
+    display: block; width: 300px; height: 380px; border: 2px dashed #c9bd8e; border-radius: 10px;
+    color: #a89a63; font-size: 12px; background: #fbf8ee; line-height: 380px; text-align: center;
+  }
+  .screen .desc { flex: 1 1 auto; }
+  .screen h3 { margin: 0 0 4px; font-size: 17px; }
+  .screen .cap { color: #8a7d55; font-style: italic; margin: 0 0 12px; font-size: 11.5px; }
+  .btns { margin: 8px 0; }
+  .btns .k { font-weight: 700; color: #6b5212; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .note { background: #f3f8f3; border-left: 4px solid #2e9e63; padding: 7px 12px; border-radius: 6px; margin: 8px 0; font-size: 11.5px; }
+
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: 11px; }
+  .b-god { background: linear-gradient(135deg,#f1cf72,#d4af37); color: #231a08; }
+  .b-elev { background: #fff3d1; color: #8a6d12; border: 1px solid #d4af37; }
+  .b-pres { background: #eceae2; color: #5e5742; border: 1px solid #cfc7ad; }
+
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 11.5px; }
+  th, td { border: 1px solid #dcd2ad; padding: 6px 9px; text-align: left; }
+  th { background: #6b5212; color: #fff; }
+  td.c { text-align: center; }
+  .pagebreak { page-break-before: always; }
+  code { background: #f1ecdd; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+  <div class="cover">
+    <img class="logo" src="../assets/logo.webp" alt="logo" />
+    <h1>Ramatlabama FM</h1>
+    <p>System Walkthrough &amp; User Guide</p>
+    <p>Listener Website &amp; Station Portal</p>
+  </div>
+
+  <p class="lead">The platform has <strong>two parts</strong>: the <strong>Listener site</strong> (what the public sees and hears) and the <strong>Station Portal</strong> (where staff log in to run the station, at <code>yourdomain.co.za/portal</code>). Access levels: <span class="badge b-god">God Admin</span> (top authority), <span class="badge b-elev">Elevated Access</span> (admins), and <span class="badge b-pres">Presenter</span>. Managers see all tabs; plain presenters do not see the Shows tab.</p>
+
+  <div class="part">PART 1 — THE STAFF PORTAL</div>
+  <p class="lead">Staff open <code>yourdomain.co.za/portal</code> and log in. Every portal screen shows, across the top: <strong>Welcome, [Name]</strong> with their <strong>title</strong>, a gold <strong>access badge</strong>, a <strong>Log out</strong> button, and the tab row <strong>Chat · News · Shows · Members · Settings</strong>.</p>
+
+  <!-- 1. CHAT -->
+  <div class="screen">
+    <div class="shot"><img src="screens/01-chat.png" onerror="this.outerHTML='&lt;span class=\'placeholder\'&gt;[ 01-chat ]&lt;/span&gt;'" /></div>
+    <div class="desc">
+      <h3>Chat tab</h3>
+      <p class="cap">The live listener message feed (read-only for staff).</p>
+      <ul>
+        <li>Shows <strong>Listener Chat</strong> — live requests, shout-outs and dedications as listeners post them.</li>
+        <li>Before anyone posts it reads <em>"Listener requests appear here."</em></li>
+        <li>Read-only by design — staff respond <strong>verbally on air</strong>, not by typing.</li>
+      </ul>
+      <div class="btns"><span class="k">Buttons:</span> <strong>Chat / News / Shows / Members / Settings</strong> switch screens; <strong>Log out</strong> ends the session.</div>
+    </div>
+  </div>
+
+  <!-- 2. NEWS -->
+  <div class="screen">
+    <div class="shot"><img src="screens/02-news.png" onerror="this.outerHTML='&lt;span class=\'placeholder\'&gt;[ 02-news ]&lt;/span&gt;'" /></div>
+    <div class="desc">
+      <h3>News tab</h3>
+      <p class="cap">Edit the "top stories" that scroll on the listener site. Everyone can edit news.</p>
+      <p>Each story row has four fields: <strong>Tag</strong> (e.g. LIVE), <strong>Date</strong>, <strong>Headline</strong>, and <strong>Detail</strong>.</p>
+      <div class="btns"><span class="k">Buttons:</span></div>
+      <ul>
+        <li><strong>+ Add story</strong> — adds a new empty story row.</li>
+        <li><strong>✕ (red)</strong> — removes that story.</li>
+        <li><strong>Save news</strong> — saves all stories; goes live on the ticker instantly.</li>
+      </ul>
+      <div class="note">Nothing saves until you press <strong>Save news</strong>. A "✓ Saved — live on site" message confirms it.</div>
+    </div>
+  </div>
+
+  <!-- 3. SHOWS -->
+  <div class="screen">
+    <div class="shot"><img src="screens/03-shows.png" onerror="this.outerHTML='&lt;span class=\'placeholder\'&gt;[ 03-shows ]&lt;/span&gt;'" /></div>
+    <div class="desc">
+      <h3>Shows tab <span style="font-size:11px;color:#8a7d55">(managers only)</span></h3>
+      <p class="cap">Manage the on-air schedule — shows and timeslots.</p>
+      <p>Three separate schedules via the top switch: <strong>Weekday (Mon–Fri)</strong>, <strong>Saturday</strong>, <strong>Sunday</strong>. Each show row has <strong>Start time</strong>, <strong>End time</strong>, <strong>Show name</strong>, and <strong>Presenter</strong>.</p>
+      <div class="btns"><span class="k">Buttons:</span></div>
+      <ul>
+        <li><strong>Weekday / Saturday / Sunday</strong> — switch which day you're editing.</li>
+        <li><strong>+ Add [day] show</strong> — adds a show row to that day.</li>
+        <li><strong>✕ (red)</strong> — removes a show.</li>
+        <li><strong>Save shows</strong> — saves all three schedules.</li>
+      </ul>
+      <div class="note">The listener site picks Saturday, Sunday, or weekday by the real day, and tags whichever show is on air as "ON NOW".</div>
+    </div>
+  </div>
+
+  <!-- 4. MEMBERS -->
+  <div class="screen">
+    <div class="shot"><img src="screens/04-members.png" onerror="this.outerHTML='&lt;span class=\'placeholder\'&gt;[ 04-members ]&lt;/span&gt;'" /></div>
+    <div class="desc">
+      <h3>Members tab</h3>
+      <p class="cap">See the team and manage access. Presenters view only; managers can enrol, elevate, revoke, delete, and edit titles.</p>
+      <p><strong>Enrol form</strong> (managers): <strong>Email</strong> (their login), <strong>Full name</strong>, <strong>Title</strong>, then <strong>+ Enrol</strong>. New presenters sign in with their email and the shared password.</p>
+      <p>Each member card shows a <strong>name</strong>, a gold <strong>access badge</strong>, and an editable <strong>title</strong> box.</p>
+      <div class="btns"><span class="k">Buttons (managers, where allowed):</span></div>
+      <ul>
+        <li><strong>↑ Elevate</strong> — grants a presenter Elevated (admin) access.</li>
+        <li><strong>↓ Revoke to presenter</strong> — removes elevated access; keeps the account as a base presenter.</li>
+        <li><strong>🗑 Delete</strong> — permanently removes the account.</li>
+        <li><strong>Title box</strong> — type and click away to save a new title.</li>
+      </ul>
+      <div class="note">The top God Admin account can never be deleted and shows no buttons to others. Elevated users manage everyone except the God Admin; the God Admin manages everyone.</div>
+    </div>
+  </div>
+
+  <!-- 5. SETTINGS -->
+  <div class="screen">
+    <div class="shot"><img src="screens/05-settings.png" onerror="this.outerHTML='&lt;span class=\'placeholder\'&gt;[ 05-settings ]&lt;/span&gt;'" /></div>
+    <div class="desc">
+      <h3>Settings tab</h3>
+      <p class="cap">Update your own display name and password.</p>
+      <div class="btns"><span class="k">Buttons:</span></div>
+      <ul>
+        <li><strong>Save name</strong> — saves your new display name.</li>
+        <li><strong>Change password</strong> — needs your current password, then the new one.</li>
+      </ul>
+      <div class="note">Every account can change its own password here. Change the default on first login.</div>
+    </div>
+  </div>
+
+  <div class="part pagebreak">PART 2 — THE LISTENER SITE</div>
+  <p class="lead">What the public sees at <code>yourdomain.co.za</code>. Audio keeps playing while visitors scroll or chat.</p>
+
+  <!-- 6. HOME -->
+  <div class="screen">
+    <div class="shot"><img src="screens/06-home.png" onerror="this.outerHTML='&lt;span class=\'placeholder\'&gt;[ 06-home ]&lt;/span&gt;'" /></div>
+    <div class="desc">
+      <h3>Home — Now Broadcasting &amp; On Air</h3>
+      <p class="cap">The top of the listener page.</p>
+      <ul>
+        <li><strong>Now Broadcasting</strong> — the show on air now, with presenter and timeslot; updates automatically.</li>
+        <li><strong>Listen Live</strong> — starts the radio; doubles as play/pause ("Playing Live").</li>
+        <li><strong>Volume slider</strong> — adjusts the level.</li>
+        <li><strong>News ticker</strong> — the station's top stories scrolling across.</li>
+        <li><strong>On Air list</strong> — the day's full schedule; the live show is tagged <strong>ON NOW</strong>.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 7. LISTENER CHAT -->
+  <div class="screen">
+    <div class="shot"><img src="screens/07-chat-listener.png" onerror="this.outerHTML='&lt;span class=\'placeholder\'&gt;[ 07-chat-listener ]&lt;/span&gt;'" /></div>
+    <div class="desc">
+      <h3>Talk to the Presenters</h3>
+      <p class="cap">Where listeners send messages that presenters read out on air.</p>
+      <div class="btns"><span class="k">Controls:</span></div>
+      <ul>
+        <li><strong>Your name</strong> — the listener's name; it <strong>locks</strong> after the first message.</li>
+        <li><strong>Type a message</strong> — the message to send.</li>
+        <li><strong>Send</strong> — posts it to the chat staff see in the portal.</li>
+      </ul>
+      <div class="note">The number of people online is intentionally not shown to listeners.</div>
+    </div>
+  </div>
+
+  <div class="part pagebreak">QUICK REFERENCE — WHO CAN DO WHAT</div>
+  <table>
+    <tr><th>Action</th><th>Presenter</th><th>Elevated</th><th>God Admin</th></tr>
+    <tr><td>View Chat, News, Members</td><td class="c">✅</td><td class="c">✅</td><td class="c">✅</td></tr>
+    <tr><td>Edit News</td><td class="c">✅</td><td class="c">✅</td><td class="c">✅</td></tr>
+    <tr><td>Edit Shows / Timeslots</td><td class="c">—</td><td class="c">✅</td><td class="c">✅</td></tr>
+    <tr><td>Enrol / elevate / revoke / delete members</td><td class="c">—</td><td class="c">✅ (not God Admin)</td><td class="c">✅ (everyone)</td></tr>
+    <tr><td>Edit own name &amp; password</td><td class="c">✅</td><td class="c">✅</td><td class="c">✅</td></tr>
+    <tr><td>Can be deleted by others</td><td class="c">✅</td><td class="c">✅ (by God Admin)</td><td class="c">❌ never</td></tr>
+  </table>
+  <p>Staff portal: <code>yourdomain.co.za/portal</code> &nbsp;·&nbsp; Listener site: <code>yourdomain.co.za</code></p>
+
+</body>
+</html>

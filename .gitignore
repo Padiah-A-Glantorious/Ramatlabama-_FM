@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Runtime data — keep credentials & editable content OUT of the repo.
+# These are generated fresh on the server from defaults / env vars.
+server/users.json
+server/content.json
+
+# Logs & OS cruft
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

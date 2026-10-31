@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ramatlabama FM — Station Portal</title>
+  <link rel="stylesheet" href="styles.css?v=17" />
+  <link rel="stylesheet" href="presenter.css?v=11" />
+</head>
+<body class="presenter-body">
+
+  <!-- ===== LOGIN ===== -->
+  <div class="pres-login" id="presLogin">
+    <div class="pres-login-card glass">
+      <div class="pres-login-logo"><img src="assets/logo.webp" alt="Ramatlabama FM" /></div>
+      <h1>Station Portal</h1>
+      <p class="pres-sub">Log in with your email (or username) and password.</p>
+      <form id="loginForm" autocomplete="off" novalidate>
+        <input type="text" id="loginId" placeholder="Email or username" autocomplete="off" />
+        <input type="password" id="loginPw" placeholder="Password" autocomplete="off" />
+        <button type="submit" class="btn-primary">Log in</button>
+        <div class="pres-error" id="loginError" hidden></div>
+      </form>
+      <a class="pres-back" href="index.html">← Back to the listener site</a>
+    </div>
+  </div>
+
+  <!-- ===== PORTAL ===== -->
+  <div class="pres-console" id="portal" hidden>
+    <header class="pres-topbar">
+      <div class="brand">
+        <span class="brand-logo"><img src="assets/logo.webp" alt="Ramatlabama FM" /></span>
+        <div class="welcome">
+          <strong id="welcomeName">Welcome</strong>
+          <small id="welcomeTitle"></small>
+        </div>
+        <span class="access-badge" id="accessBadge"></span>
+      </div>
+      <button class="btn-ghost" id="logoutBtn">Log out</button>
+    </header>
+
+    <!-- Tabs -->
+    <nav class="portal-tabs" id="portalTabs">
+      <button class="ptab active" data-tab="chat">💬 Chat</button>
+      <button class="ptab" data-tab="news">📰 News</button>
+      <button class="ptab manage-only" data-tab="shows" hidden>🗓 Shows</button>
+      <button class="ptab" data-tab="members">👥 Members</button>
+      <button class="ptab" data-tab="settings">⚙ Settings</button>
+    </nav>
+
+    <div class="portal-body">
+
+      <!-- CHAT tab (read-only listener feed) -->
+      <section class="ptab-view active" id="tab-chat">
+        <div class="edit-card glass">
+          <div class="edit-head"><h2>💬 Listener Chat</h2></div>
+          <p class="edit-hint">Live messages from listeners — read requests out on air.</p>
+          <div class="pres-messages" id="chatFeed"></div>
+        </div>
+      </section>
+
+      <!-- NEWS tab (everyone) -->
+      <section class="ptab-view" id="tab-news">
+        <div class="edit-card glass">
+          <div class="edit-head">
+            <h2>📰 News — Top Stories</h2>
+            <button class="add-btn" id="addNews">+ Add story</button>
+          </div>
+          <p class="edit-hint">These scroll in the news ticker on the listener site.</p>
+          <div class="rows" id="newsRows"></div>
+          <div class="save-row"><button class="btn-primary" id="saveNews">💾 Save news</button><span class="save-state" id="newsState"></span></div>
+        </div>
+      </section>
+
+      <!-- SHOWS tab (manager only) -->
+      <section class="ptab-view" id="tab-shows">
+        <div class="edit-card glass">
+          <div class="edit-head">
+            <h2>🗓 Shows &amp; Timeslots</h2>
+          </div>
+          <div class="shows-switch">
+            <button class="shows-day active" data-day="weekday">Weekday (Mon–Fri)</button>
+            <button class="shows-day" data-day="saturday">Saturday</button>
+            <button class="shows-day" data-day="sunday">Sunday</button>
+          </div>
+          <p class="edit-hint">The show on air right now (by day &amp; time) shows as "Now Broadcasting" with its presenter. Saturday and Sunday are separate — add shows for each.</p>
+          <div class="rows" id="weekdayRows"></div>
+          <div class="rows" id="saturdayRows" hidden></div>
+          <div class="rows" id="sundayRows" hidden></div>
+          <div class="add-row">
+            <button class="add-btn" id="addWeekday">+ Add weekday show</button>
+            <button class="add-btn" id="addSaturday" hidden>+ Add Saturday show</button>
+            <button class="add-btn" id="addSunday" hidden>+ Add Sunday show</button>
+          </div>
+          <div class="save-row"><button class="btn-primary" id="saveShows">💾 Save shows</button><span class="save-state" id="showsState"></span></div>
+        </div>
+      </section>
+
+      <!-- MEMBERS tab (manager only) -->
+      <section class="ptab-view" id="tab-members">
+        <div class="edit-card glass">
+          <div class="edit-head"><h2>👥 Members &amp; Access</h2></div>
+          <form class="enrol-form" id="enrolForm" autocomplete="off">
+            <input type="email" id="enrolEmail" placeholder="email@example.com" />
+            <input type="text" id="enrolName" placeholder="Full name (optional)" />
+            <input type="text" id="enrolTitle" placeholder="Title (optional)" />
+            <button type="submit" class="add-btn">+ Enrol</button>
+          </form>
+          <div class="members-list" id="membersList"></div>
+          <div class="save-state" id="membersState"></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS tab (everyone) -->
+      <section class="ptab-view" id="tab-settings">
+        <div class="edit-card glass">
+          <div class="edit-head"><h2>⚙ Settings</h2></div>
+
+          <div class="setting-block">
+            <label>Display name</label>
+            <div class="setting-row">
+              <input type="text" id="setName" maxlength="40" />
+              <button class="btn-primary" id="saveName">Save name</button>
+            </div>
+          </div>
+
+          <div class="setting-block">
+            <label>Change password</label>
+            <div class="setting-row col">
+              <input type="password" id="curPw" placeholder="Current password" />
+              <input type="password" id="newPw" placeholder="New password" />
+              <button class="btn-primary" id="savePw">Change password</button>
+            </div>
+          </div>
+          <div class="save-state" id="settingsState"></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="config.js?v=17"></script>
+  <script src="presenter.js?v=11"></script>
+</body>
+</html>

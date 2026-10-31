@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ramatlabama FM — Live Radio, News &amp; Community</title>
+  <link rel="stylesheet" href="styles.css?v=17" />
+</head>
+<body>
+  <!-- ====================== TOP BAR ====================== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo"><img src="assets/logo.webp" alt="Ramatlabama FM" /></span>
+      <div class="brand-text">
+        <strong>Ramatlabama FM</strong>
+        <small>Live Radio &amp; Community Hub</small>
+      </div>
+      <span class="live-pill" id="livePill">
+        <span class="live-dot"></span><span class="live-label">OFFLINE</span>
+      </span>
+    </div>
+
+  </header>
+
+  <!-- ====================== MAIN (single screen) ====================== -->
+  <main class="content">
+    <div class="home-scroll">
+
+      <!-- Compact now-playing strip -->
+      <div class="hero glass">
+        <div class="hero-left">
+          <div class="hero-kicker"><span class="hero-live-dot"></span> NOW BROADCASTING</div>
+          <h1 id="nowShow">Ramatlabama FM Live</h1>
+          <p id="nowDesc">Music, talk and community from the North West border.</p>
+        </div>
+        <div class="hero-player">
+          <button class="btn-primary" id="heroPlay">▶ Listen Live</button>
+          <div class="hero-controls">
+            <span class="vol-icon">🔊</span>
+            <input type="range" id="volume" min="0" max="1" step="0.01" value="0.9" aria-label="Volume" />
+            <span class="radio-status" id="radioStatus">Starting…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scrolling news ticker -->
+      <div class="ticker glass" id="newsTicker">
+        <span class="ticker-label">📰 NEWS</span>
+        <div class="ticker-viewport">
+          <div class="ticker-track" id="tickerTrack"><!-- injected --></div>
+        </div>
+      </div>
+
+      <!-- Main grid: chat (big) · info sidebar (slim) -->
+      <div class="main-grid">
+
+        <!-- CHAT — the main, spacious column -->
+        <div class="chat-wrap glass">
+          <div class="chat-header">
+            <h2>🎙 Talk to the Presenters</h2>
+          </div>
+
+          <div class="messages" id="messages" aria-live="polite"></div>
+
+          <form class="composer" id="composer" autocomplete="off">
+            <input id="nameInput" class="name-input" type="text" placeholder="Your name" maxlength="24" />
+            <input id="msgInput" class="msg-input" type="text" placeholder="Type a message…" maxlength="500" required />
+            <button type="submit" class="send-btn">Send</button>
+          </form>
+        </div>
+
+        <!-- INFO sidebar: On Air -->
+        <aside class="info-col">
+          <div class="card glass">
+            <div class="card-head">
+              <h2>🗓 On Air</h2>
+              <span class="card-sub" id="todayLabel"></span>
+            </div>
+            <div class="schedule" id="scheduleList"><!-- injected --></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </main>
+
+  <!-- Persistent audio element (hidden; controlled from the hero) -->
+  <audio id="player" preload="none"></audio>
+
+  <script src="config.js?v=18"></script>
+  <script src="app.js?v=18"></script>
+</body>
+</html>

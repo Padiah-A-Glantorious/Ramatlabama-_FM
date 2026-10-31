@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: ramatlabama-fm
+    env: node
+    plan: free
+    buildCommand: cd server && npm install
+    startCommand: node server/server.js
+    envVars:
+      - key: GOD_PASSWORD
+        sync: false
+      - key: CEO_PASSWORD
+        sync: false
+      - key: PRESENTER_PASSWORD
+        sync: false

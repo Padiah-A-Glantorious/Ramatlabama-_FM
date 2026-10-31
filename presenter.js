@@ -1,0 +1,382 @@
+/* ============================================================
+   Ramatlabama FM — Station Portal
+   Roles: god (Padiah), elevated (CEO + granted), presenter.
+   Tabs: Chat, News (all), Shows + Members (manager only), Settings.
+   ============================================================ */
+
+(() => {
+  "use strict";
+  console.log("%cStation Portal v6 loaded", "color:#d4af37;font-weight:bold");
+  const cfg = window.RADIO_CONFIG || {};
+  const byId = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s);
+  const escAttr = (s) => esc(s).replace(/"/g, "&quot;");
+  const escHtml = (s) => esc(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+  let me = null;        // current user
+  let token = localStorage.getItem("rfm_token") || null;
+  let content = { showsWeekday: [], showsSaturday: [], showsSunday: [], news: [] };
+  let members = [];
+  let meId = null;
+  let meRole = "presenter";
+  let meCanManage = false;
+
+  // Mirror of the server rule: who may actor act on target?
+  function canActOn(actorRole, targetRole) {
+    if (targetRole === "god") return actorRole === "god";
+    return actorRole === "god" || actorRole === "elevated";
+  }
+
+  /* ============ LOGIN ============ */
+  const loginEl = byId("presLogin");
+  const portal  = byId("portal");
+  const loginForm = byId("loginForm");
+  const loginErr = byId("loginError");
+
+  function showLoginErr(m) { loginErr.textContent = m; loginErr.hidden = false; }
+
+  loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const identifier = byId("loginId").value.trim();
+    const password = byId("loginPw").value;
+    if (!identifier || !password) { showLoginErr("Enter your login and password."); return; }
+    try {
+      const r = await fetch("/api/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier, password }),
+      });
+      const res = await r.json();
+      if (!r.ok || !res.ok) { showLoginErr(res.error || "Login failed."); return; }
+      token = res.token; localStorage.setItem("rfm_token", token);
+      me = res.user;
+      enterPortal();
+    } catch (_) { showLoginErr("Can't reach the server."); }
+  });
+
+  byId("logoutBtn").addEventListener("click", () => {
+    localStorage.removeItem("rfm_token"); location.reload();
+  });
+
+  // Try to restore an existing session on load.
+  async function restore() {
+    if (!token) return;
+    try {
+      const r = await fetch("/api/me", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const res = await r.json();
+      if (r.ok && res.ok) { me = res.user; enterPortal(); }
+    } catch (_) {}
+  }
+
+  function isManager() { return me && (me.role === "god" || me.role === "elevated"); }
+  function accessLabel() {
+    return me.role === "god" ? "God Admin" : me.role === "elevated" ? "Elevated Access" : "Presenter";
+  }
+
+  async function enterPortal() {
+    loginEl.hidden = true;
+    portal.hidden = false;
+
+    byId("welcomeName").textContent = "Welcome, " + me.name;
+    byId("welcomeTitle").textContent = me.title || "";
+    byId("accessBadge").textContent = accessLabel();
+
+    // Manager-only tabs
+    document.querySelectorAll(".manage-only").forEach((el) => { el.hidden = !isManager(); });
+
+    // Prefill settings
+    byId("setName").value = me.name || "";
+
+    await loadContent();
+    renderNews();
+    renderShows();
+    loadMembers();     // everyone can view the members list
+    connectChat();
+  }
+
+  /* ============ TABS ============ */
+  document.querySelectorAll(".ptab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".ptab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      document.querySelectorAll(".ptab-view").forEach((v) => v.classList.remove("active"));
+      byId("tab-" + tab.dataset.tab).classList.add("active");
+    });
+  });
+
+  /* ============ CONTENT LOAD ============ */
+  async function loadContent() {
+    try {
+      const r = await fetch("/api/content", { cache: "no-store" });
+      const c = await r.json();
+      content.showsWeekday = Array.isArray(c.showsWeekday) ? c.showsWeekday : [];
+      content.showsSaturday = Array.isArray(c.showsSaturday) ? c.showsSaturday : [];
+      content.showsSunday = Array.isArray(c.showsSunday) ? c.showsSunday : [];
+      content.news = Array.isArray(c.news) ? c.news : [];
+    } catch (_) {}
+  }
+
+  /* ============ NEWS (everyone) ============ */
+  function renderNews() {
+    const wrap = byId("newsRows"); wrap.innerHTML = "";
+    content.news.forEach((n, i) => {
+      const row = document.createElement("div");
+      row.className = "row news-row";
+      row.innerHTML = `
+        <input class="f-tag" placeholder="TAG" value="${escAttr(n.tag)}" />
+        <input class="f-date" placeholder="Date" value="${escAttr(n.date)}" />
+        <input class="f-title" placeholder="Headline" value="${escAttr(n.title)}" />
+        <input class="f-body" placeholder="One-line detail" value="${escAttr(n.body)}" />
+        <button class="row-del" title="Remove">✕</button>`;
+      row.querySelector(".f-tag").oninput = (e) => content.news[i].tag = e.target.value;
+      row.querySelector(".f-date").oninput = (e) => content.news[i].date = e.target.value;
+      row.querySelector(".f-title").oninput = (e) => content.news[i].title = e.target.value;
+      row.querySelector(".f-body").oninput = (e) => content.news[i].body = e.target.value;
+      row.querySelector(".row-del").onclick = () => { content.news.splice(i, 1); renderNews(); };
+      wrap.appendChild(row);
+    });
+    if (!content.news.length) wrap.innerHTML = '<p class="edit-empty">No stories yet.</p>';
+  }
+  byId("addNews").onclick = () => { content.news.push({ tag: "NEWS", title: "", body: "", date: "" }); renderNews(); };
+  byId("saveNews").onclick = async () => {
+    setState("newsState", "Saving…");
+    try {
+      const r = await fetch("/api/news", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, news: content.news }) });
+      const res = await r.json();
+      if (!r.ok || !res.ok) return setState("newsState", res.error || "Failed", false);
+      content.news = res.news; renderNews();
+      setState("newsState", "✓ Saved — live on site", true);
+    } catch (_) { setState("newsState", "Can't reach server", false); }
+  };
+
+  /* ============ SHOWS (manager only) ============ */
+  const DAYS = ["weekday", "saturday", "sunday"];
+  document.querySelectorAll(".shows-day").forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll(".shows-day").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      const day = b.dataset.day;
+      byId("weekdayRows").hidden = day !== "weekday";
+      byId("saturdayRows").hidden = day !== "saturday";
+      byId("sundayRows").hidden = day !== "sunday";
+      byId("addWeekday").hidden = day !== "weekday";
+      byId("addSaturday").hidden = day !== "saturday";
+      byId("addSunday").hidden = day !== "sunday";
+    };
+  });
+
+  function renderShowList(arr, wrapId) {
+    const wrap = byId(wrapId); wrap.innerHTML = "";
+    arr.forEach((s, i) => {
+      const row = document.createElement("div");
+      row.className = "row show-row";
+      row.innerHTML = `
+        <input class="f-start" type="time" value="${escAttr(s.start)}" />
+        <input class="f-end" type="time" value="${escAttr(s.end)}" />
+        <input class="f-show" placeholder="Show name" value="${escAttr(s.show)}" />
+        <input class="f-host" placeholder="Presenter" value="${escAttr(s.host)}" />
+        <button class="row-del" title="Remove">✕</button>`;
+      row.querySelector(".f-start").oninput = (e) => arr[i].start = e.target.value;
+      row.querySelector(".f-end").oninput = (e) => arr[i].end = e.target.value;
+      row.querySelector(".f-show").oninput = (e) => arr[i].show = e.target.value;
+      row.querySelector(".f-host").oninput = (e) => arr[i].host = e.target.value;
+      row.querySelector(".row-del").onclick = () => { arr.splice(i, 1); renderShows(); };
+      wrap.appendChild(row);
+    });
+    if (!arr.length) wrap.innerHTML = '<p class="edit-empty">No shows yet.</p>';
+  }
+  function renderShows() {
+    renderShowList(content.showsWeekday, "weekdayRows");
+    renderShowList(content.showsSaturday, "saturdayRows");
+    renderShowList(content.showsSunday, "sundayRows");
+  }
+  byId("addWeekday").onclick  = () => { content.showsWeekday.push({ start: "00:00", end: "00:00", show: "", host: "" }); renderShows(); };
+  byId("addSaturday").onclick = () => { content.showsSaturday.push({ start: "00:00", end: "00:00", show: "", host: "" }); renderShows(); };
+  byId("addSunday").onclick   = () => { content.showsSunday.push({ start: "00:00", end: "00:00", show: "", host: "" }); renderShows(); };
+  byId("saveShows").onclick = async () => {
+    setState("showsState", "Saving…");
+    try {
+      const r = await fetch("/api/shows", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, showsWeekday: content.showsWeekday, showsSaturday: content.showsSaturday, showsSunday: content.showsSunday }) });
+      const res = await r.json();
+      if (!r.ok || !res.ok) return setState("showsState", res.error || "Failed", false);
+      content.showsWeekday = res.showsWeekday; content.showsSaturday = res.showsSaturday; content.showsSunday = res.showsSunday; renderShows();
+      setState("showsState", "✓ Saved — live on site", true);
+    } catch (_) { setState("showsState", "Can't reach server", false); }
+  };
+
+  /* ============ MEMBERS (manager only) ============ */
+  async function loadMembers() {
+    try {
+      const r = await fetch("/api/members", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }) });
+      const res = await r.json();
+      if (r.ok && res.ok) {
+        members = res.members; meId = res.meId; meRole = res.meRole || "presenter"; meCanManage = !!res.canManage;
+        byId("enrolForm").style.display = meCanManage ? "flex" : "none";
+        renderMembers();
+      }
+    } catch (_) {}
+  }
+  function roleTag(role) {
+    const label = role === "god" ? "God Admin" : role === "elevated" ? "Elevated Access" : "Presenter";
+    return `<span class="role-tag ${role}">${label}</span>`;
+  }
+  function renderMembers() {
+    const wrap = byId("membersList"); wrap.innerHTML = "";
+    members.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "member-row";
+      // Can the logged-in user act on this member?
+      const editable = meCanManage && canActOn(meRole, m.role);
+      const isSelf = m.id === meId;
+
+      // Title: inline text box for rows you can edit, plain text otherwise.
+      const titleHtml = editable
+        ? `<input class="m-title-input" data-id="${m.id}" value="${escAttr(m.title || "")}" placeholder="Title" />`
+        : `<span class="member-sub">${escHtml(m.title || "")}</span>`;
+
+      let actions = "";
+      if (editable) {
+        if (m.role === "presenter")
+          actions += `<button class="m-btn elevate" data-id="${m.id}">↑ Elevate</button>`;
+        else if (m.role === "elevated")
+          actions += `<button class="m-btn revoke" data-id="${m.id}">↓ Revoke to presenter</button>`;
+        // Delete: any non-god account, but never your own.
+        if (m.role !== "god" && !isSelf)
+          actions += `<button class="m-btn delete" data-id="${m.id}" data-name="${escAttr(m.name)}">🗑 Delete</button>`;
+      }
+      row.innerHTML = `
+        <div class="member-info">
+          <div class="member-name">${escHtml(m.name)} ${roleTag(m.role)}</div>
+          ${titleHtml}
+        </div>
+        <div class="member-actions">${actions}</div>`;
+      wrap.appendChild(row);
+    });
+  }
+  byId("membersList").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".m-btn"); if (!btn) return;
+    const id = btn.dataset.id;
+    if (btn.classList.contains("revoke")) {
+      if (!confirm("Revoke elevated access? They drop to base-level presenter (account kept).")) return;
+      await memberAction("/api/members/revoke", { id });
+    } else if (btn.classList.contains("elevate")) {
+      await memberAction("/api/members/setrole", { id, role: "elevated" });
+    } else if (btn.classList.contains("delete")) {
+      if (!confirm("Permanently delete " + (btn.dataset.name || "this member") + "? This removes the account entirely.")) return;
+      await memberAction("/api/members/delete", { id });
+    }
+  });
+  // Save a title when the inline box loses focus or Enter is pressed.
+  byId("membersList").addEventListener("blur", (e) => {
+    const inp = e.target.closest(".m-title-input"); if (inp) saveTitle(inp);
+  }, true);
+  byId("membersList").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { const inp = e.target.closest(".m-title-input"); if (inp) { e.preventDefault(); inp.blur(); } }
+  });
+  let titleSaving = false;
+  async function saveTitle(inp) {
+    if (titleSaving) return;
+    const id = inp.dataset.id;
+    const member = members.find((x) => x.id === id);
+    if (!member || inp.value.trim() === (member.title || "")) return;  // no change
+    titleSaving = true;
+    await memberAction("/api/members/title", { id, title: inp.value.trim() });
+    titleSaving = false;
+  }
+  async function memberAction(url, extra) {
+    setState("membersState", "Working…");
+    try {
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, ...extra }) });
+      const res = await r.json();
+      if (!r.ok || !res.ok) return setState("membersState", res.error || "Failed", false);
+      members = res.members; meId = res.meId; meRole = res.meRole || meRole; meCanManage = !!res.canManage; renderMembers();
+      setState("membersState", "✓ Done", true);
+    } catch (_) { setState("membersState", "Can't reach server", false); }
+  }
+  byId("enrolForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = byId("enrolEmail").value.trim();
+    const name = byId("enrolName").value.trim();
+    const title = byId("enrolTitle").value.trim();
+    setState("membersState", "Enrolling…");
+    try {
+      const r = await fetch("/api/members/enrol", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, email, name, title }) });
+      const res = await r.json();
+      if (!r.ok || !res.ok) return setState("membersState", res.error || "Failed", false);
+      members = res.members; meId = res.meId; meRole = res.meRole || meRole; meCanManage = !!res.canManage; renderMembers();
+      byId("enrolEmail").value = byId("enrolName").value = byId("enrolTitle").value = "";
+      setState("membersState", "✓ Enrolled (password: presenter2026)", true);
+    } catch (_) { setState("membersState", "Can't reach server", false); }
+  });
+
+  /* ============ SETTINGS ============ */
+  byId("saveName").onclick = async () => {
+    const name = byId("setName").value.trim();
+    if (!name) return setState("settingsState", "Name can't be empty", false);
+    try {
+      const r = await fetch("/api/me/name", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, name }) });
+      const res = await r.json();
+      if (r.ok && res.ok) {
+        me = res.user; byId("welcomeName").textContent = "Welcome, " + me.name;
+        setState("settingsState", "✓ Name updated", true);
+      }
+    } catch (_) { setState("settingsState", "Can't reach server", false); }
+  };
+  byId("savePw").onclick = async () => {
+    const current = byId("curPw").value, next = byId("newPw").value;
+    try {
+      const r = await fetch("/api/me/password", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, current, next }) });
+      const res = await r.json();
+      if (!r.ok || !res.ok) return setState("settingsState", res.error || "Failed", false);
+      byId("curPw").value = byId("newPw").value = "";
+      setState("settingsState", "✓ Password changed", true);
+    } catch (_) { setState("settingsState", "Can't reach server", false); }
+  };
+
+  /* ============ CHAT FEED (read-only) ============ */
+  function connectChat() {
+    const feed = byId("chatFeed");
+    if (cfg.chatMode !== "server" || !cfg.chatServerUrl) return;
+    let ws;
+    function add(name, text, system) {
+      const d = document.createElement("div");
+      if (system) { d.className = "pres-msg system"; d.textContent = text; }
+      else {
+        d.className = "pres-msg";
+        d.innerHTML = `<div class="pres-msg-name">${escHtml(name)}</div><div>${escHtml(text)}</div>`;
+      }
+      feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
+    }
+    function connect() {
+      ws = new WebSocket(cfg.chatServerUrl);
+      ws.onmessage = (ev) => {
+        let d; try { d = JSON.parse(ev.data); } catch { return; }
+        if (d.type === "chat") add(d.name, d.text);
+        // presence (online count) is intentionally ignored — not shown.
+      };
+      ws.onclose = () => { setTimeout(connect, 2500); };
+      ws.onerror = () => ws.close();
+    }
+    connect();
+    add(null, "Listener requests appear here.", true);
+  }
+
+  /* ============ util ============ */
+  function setState(id, text, ok) {
+    const el = byId(id); if (!el) return;
+    el.textContent = text;
+    el.style.color = ok === false ? "#ff6b5e" : ok ? "#7fe0a2" : "var(--muted)";
+    if (ok) setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, 3000);
+  }
+
+  restore();
+})();

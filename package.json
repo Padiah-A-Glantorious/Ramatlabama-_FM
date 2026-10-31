@@ -1,0 +1,14 @@
+{
+  "name": "ramatlabama-fm",
+  "version": "1.0.0",
+  "description": "Ramatlabama FM — listener site + station portal (live radio, chat, admin).",
+  "type": "commonjs",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "postinstall": "cd server && npm install"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

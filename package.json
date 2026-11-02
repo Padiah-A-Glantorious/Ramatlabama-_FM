@@ -2,6 +2,8 @@
   "name": "ramatlabama-fm",
   "version": "1.0.0",
   "description": "Ramatlabama FM — listener site + station portal (live radio, chat, admin).",
+  "license": "UNLICENSED",
+  "private": true,
   "type": "commonjs",
   "main": "server/server.js",
   "scripts": {

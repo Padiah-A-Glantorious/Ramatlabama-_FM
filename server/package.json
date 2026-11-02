@@ -2,6 +2,8 @@
   "name": "ramatlabama-chat-server",
   "version": "1.0.0",
   "description": "Real-time WebSocket chat + static file server for the Ramatlabama FM site.",
+  "license": "UNLICENSED",
+  "private": true,
   "type": "commonjs",
   "main": "server.js",
   "scripts": {

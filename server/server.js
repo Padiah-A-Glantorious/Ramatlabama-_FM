@@ -185,9 +185,24 @@ function authUser(body) {   // returns the user for a request token, or null
 }
 
 /* ================= HTTP server ================= */
+// Subdomains that should land on the staff portal instead of the public site.
+// e.g. management.ramatlabamafm.co.za  ->  serves presenter.html at "/".
+const PORTAL_HOSTS = (process.env.PORTAL_HOSTS || "management.")
+  .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+function isPortalHost(hostHeader) {
+  const host = String(hostHeader || "").toLowerCase().split(":")[0];
+  return PORTAL_HOSTS.some((h) =>
+    h.endsWith(".") ? host.startsWith(h) : host === h
+  );
+}
+
 const httpServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
   const p = url.pathname;
+
+  // When reached via the management subdomain, the homepage IS the portal.
+  // (API routes and static assets like CSS/JS still resolve normally below.)
+  const portalHost = isPortalHost(req.headers.host);
 
   /* ---- public: live content for the listener site ---- */
   if (p === "/api/content" && req.method === "GET") {
@@ -359,6 +374,8 @@ const httpServer = http.createServer(async (req, res) => {
   /* ---- friendly route: /portal -> the presenter/admin page ---- */
   let reqPath = p;
   if (reqPath === "/portal" || reqPath === "/portal/") reqPath = "/presenter.html";
+  // On the management subdomain, the root path is the portal itself.
+  if (portalHost && (reqPath === "/" || reqPath === "/index.html")) reqPath = "/presenter.html";
 
   /* ---- static files ---- */
   let filePath = path.normalize(path.join(SITE_DIR, decodeURIComponent(reqPath === "/" ? "/index.html" : reqPath)));

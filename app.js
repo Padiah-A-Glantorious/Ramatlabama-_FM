@@ -108,14 +108,17 @@
      =================================================================== */
   const live = {
     showsWeekday: cfg.schedule || [],
-    showsWeekend: cfg.schedule || [],
+    showsSaturday: cfg.schedule || [],
+    showsSunday: cfg.schedule || [],
     news: cfg.news || [],
   };
 
-  // Pick today's schedule: Sat/Sun → weekend, else weekday.
+  // Pick today's schedule: Sun → Sunday, Sat → Saturday, else weekday.
   function todayShows() {
     const dow = new Date().getDay();   // 0 = Sun, 6 = Sat
-    return (dow === 0 || dow === 6) ? (live.showsWeekend || []) : (live.showsWeekday || []);
+    if (dow === 0) return live.showsSunday || [];
+    if (dow === 6) return live.showsSaturday || [];
+    return live.showsWeekday || [];
   }
 
   async function loadLiveContent() {
@@ -123,8 +126,9 @@
       const r = await fetch("/api/content", { cache: "no-store" });
       if (!r.ok) return;
       const c = await r.json();
-      if (Array.isArray(c.showsWeekday)) live.showsWeekday = c.showsWeekday;
-      if (Array.isArray(c.showsWeekend)) live.showsWeekend = c.showsWeekend;
+      if (Array.isArray(c.showsWeekday))  live.showsWeekday  = c.showsWeekday;
+      if (Array.isArray(c.showsSaturday)) live.showsSaturday = c.showsSaturday;
+      if (Array.isArray(c.showsSunday))   live.showsSunday   = c.showsSunday;
       if (Array.isArray(c.news)) live.news = c.news;
       renderHome();
     } catch (_) { /* server not running: keep config defaults */ }
@@ -269,8 +273,19 @@
   addMessage({ system: true, text: "Send your requests, shout-outs and dedications — presenters read them out live on air. 🎙" });
 
   /* ---- Backend adapter ---- */
+  // Work out the chat server URL. When the page is served by our own Node
+  // server (localhost, onrender.com, or ramatlabamafm.co.za) the chat lives on
+  // the SAME host/port, so derive it from the current page. This makes the
+  // deployed site "just work" over HTTPS (wss://) with no config edits.
+  function resolveChatUrl() {
+    const configured = (cfg.chatServerUrl || "").trim();
+    // If opened as a plain file (file://) with no server, honour the config.
+    if (location.protocol === "file:") return configured;
+    const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${scheme}//${location.host}`;
+  }
   const backend = (cfg.chatMode === "server")
-    ? createServerBackend(cfg.chatServerUrl)
+    ? createServerBackend(resolveChatUrl())
     : createLocalBackend();
 
   composer.addEventListener("submit", (e) => {

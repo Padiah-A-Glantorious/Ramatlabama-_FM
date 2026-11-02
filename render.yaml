@@ -5,7 +5,16 @@ services:
     plan: free
     buildCommand: cd server && npm install
     startCommand: node server/server.js
+    # Persistent storage so portal edits (members/news/shows) survive restarts.
+    # NOTE: a Disk requires a paid instance (Starter+). On the free plan,
+    # remove the "disk:" block and the DATA_DIR var; data will reset on restart.
+    disk:
+      name: ramatlabama-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: DATA_DIR
+        value: /var/data
       - key: GOD_PASSWORD
         sync: false
       - key: CEO_PASSWORD

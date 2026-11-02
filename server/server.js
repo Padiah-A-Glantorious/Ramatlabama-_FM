@@ -15,8 +15,14 @@ const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 3001;
 const SITE_DIR = path.join(__dirname, "..");
-const CONTENT_FILE = path.join(__dirname, "content.json");
-const USERS_FILE = path.join(__dirname, "users.json");
+
+// Where editable data (members, news, shows) is stored. On Render, set
+// DATA_DIR to a mounted persistent Disk (e.g. /var/data) so portal edits
+// survive restarts and redeploys. Defaults to this folder for local dev.
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {}
+const CONTENT_FILE = path.join(DATA_DIR, "content.json");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
 
 // Default passwords — override in production via environment variables.
 const PRESENTER_PASSWORD_DEFAULT = process.env.PRESENTER_PASSWORD || "presenter2026";

@@ -2,7 +2,7 @@ services:
   - type: web
     name: ramatlabama-fm
     env: node
-    plan: free
+    plan: starter
     buildCommand: cd server && npm install
     startCommand: node server/server.js
     # Persistent storage so portal edits (members/news/shows) survive restarts.

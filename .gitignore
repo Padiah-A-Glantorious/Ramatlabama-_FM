@@ -6,6 +6,13 @@ server/node_modules/
 # These are generated fresh on the server from defaults / env vars.
 server/users.json
 server/content.json
+server/chat.json
+server/adverts.json
+server/promos.json
+server/adverts/
+server/promos/
+# any stray backups from the corruption-safe loader
+server/*.corrupt-*.bak
 
 # Logs & OS cruft
 *.log

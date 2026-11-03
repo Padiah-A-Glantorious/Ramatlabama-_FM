@@ -226,6 +226,130 @@
   setInterval(() => { updateNowBroadcasting(); highlightCurrentShow(); }, 60000);
 
   /* ===================================================================
+     ADVERT TAKEOVER
+     Every ON_AIR_MS the On Air card hides and an advert image animates
+     in (random effect each time), holds for ADVERT_MS, then On Air
+     returns. Rotates through all uploaded adverts. Does nothing when no
+     adverts are uploaded.
+     =================================================================== */
+  const ON_AIR_MS  = 3 * 60 * 1000;   // On Air visible for 3 minutes
+  const ADVERT_MS  = 60 * 1000;       // advert visible for 60 seconds
+  const AD_EFFECTS = ["fx-fade", "fx-zoom", "fx-slideUp", "fx-slideL", "fx-flip", "fx-blur", "fx-rotate"];
+
+  const onairView  = byId("onairView");
+  const advertView = byId("advertView");
+  const advertImg  = byId("advertImg");
+  const advertBg   = byId("advertBg");
+
+  let adList = [];      // [{ id, name, url, ts }]
+  let adIndex = 0;      // which advert to show next (rotation)
+  let adFirstTimer = null;
+  let adCycleTimer = null;
+  let adHoldTimer = null;
+  let lastEffect = "";
+
+  function adSignature(list) { return list.map((a) => a.id).join("|"); }
+
+  async function loadAdverts() {
+    let next = [];
+    try {
+      const r = await fetch("/api/promos", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      next = Array.isArray(data.adverts) ? data.adverts : [];
+    } catch (_) { next = []; }
+    // Only restart the cycle if the set of adverts actually changed, so the
+    // periodic refresh doesn't keep resetting the 3-minute timer.
+    if (adSignature(next) !== adSignature(adList)) {
+      adList = next;
+      adIndex = 0;
+      restartAdCycle();
+    }
+  }
+
+  function randomEffect() {
+    // Pick an effect different from the previous one for variety.
+    let fx = AD_EFFECTS[Math.floor(Math.random() * AD_EFFECTS.length)];
+    if (fx === lastEffect && AD_EFFECTS.length > 1) {
+      fx = AD_EFFECTS[(AD_EFFECTS.indexOf(fx) + 1) % AD_EFFECTS.length];
+    }
+    lastEffect = fx;
+    return fx;
+  }
+
+  // Name of the show currently on air, or "" if nothing is scheduled now.
+  function currentShowName() {
+    const sched = todayShows();
+    const i = currentShowIndex();
+    return (i >= 0 && sched[i]) ? (sched[i].show || "") : "";
+  }
+
+  // Adverts eligible to air right now: "All shows" ones, plus any targeting
+  // the show currently on air (matched by name, case-insensitive).
+  function eligibleAdverts() {
+    const now = currentShowName().trim().toLowerCase();
+    return adList.filter((a) => {
+      const target = (a.show || "").trim().toLowerCase();
+      if (!target) return true;            // "All shows"
+      return now && target === now;        // specific show must be on air now
+    });
+  }
+
+  function showAdvert() {
+    if (!advertView) return;
+    const eligible = eligibleAdverts();
+    if (!eligible.length) return;          // nothing targeted at the current show → skip this break
+    const ad = eligible[adIndex % eligible.length];
+    adIndex = (adIndex + 1) % eligible.length;
+
+    // Preload the image so the animation starts with it ready.
+    const pre = new Image();
+    pre.onload = () => {
+      advertImg.src = ad.url;
+      advertImg.alt = ad.name || "Advertisement";
+      if (advertBg) advertBg.src = ad.url;   // blurred backdrop fills the box
+      advertView.hidden = false;
+      advertView.classList.remove("fx-out");
+      const fx = randomEffect();
+      AD_EFFECTS.forEach((c) => advertView.classList.remove(c));
+      // reflow to restart the animation, then apply the chosen effect
+      void advertView.offsetWidth;
+      advertView.classList.add(fx);
+
+      adHoldTimer = setTimeout(hideAdvert, ADVERT_MS);
+    };
+    pre.onerror = () => { /* skip a broken image; try again next cycle */ };
+    pre.src = ad.url;
+  }
+
+  function hideAdvert() {
+    if (!advertView) return;
+    advertView.classList.add("fx-out");
+    setTimeout(() => {
+      advertView.hidden = true;
+      AD_EFFECTS.forEach((c) => advertView.classList.remove(c));
+      advertView.classList.remove("fx-out");
+    }, 550);
+  }
+
+  function restartAdCycle() {
+    if (adFirstTimer) { clearTimeout(adFirstTimer); adFirstTimer = null; }
+    if (adCycleTimer) { clearInterval(adCycleTimer); adCycleTimer = null; }
+    if (adHoldTimer)  { clearTimeout(adHoldTimer);  adHoldTimer = null; }
+    if (advertView) { advertView.hidden = true; AD_EFFECTS.forEach((c) => advertView.classList.remove(c)); }
+    if (!adList.length) return;   
+   
+    adFirstTimer = setTimeout(() => {
+      showAdvert();
+      adCycleTimer = setInterval(showAdvert, ON_AIR_MS + ADVERT_MS);
+    }, ON_AIR_MS);
+  }
+
+  loadAdverts();
+  // Re-check for advert changes periodically (managers may upload/remove).
+  setInterval(loadAdverts, 2 * 60 * 1000);
+
+  /* ===================================================================
      CHAT  (public, name locks once set)
      Presenters respond verbally on air — no in-chat replies/badges.
      =================================================================== */

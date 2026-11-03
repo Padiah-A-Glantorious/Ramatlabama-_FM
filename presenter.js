@@ -94,6 +94,7 @@
     renderShows();
     loadMembers();     // everyone can view the members list
     connectChat();
+    if (isManager()) loadAdverts();
   }
 
   /* ============ TABS ============ */
@@ -397,6 +398,106 @@
         ws.send(JSON.stringify({ type: "clear", token }));
       };
     }
+  }
+
+  /* ============ ADVERTS (manager only) ============ */
+  let advertList = [];
+
+  async function loadAdverts() {
+    try {
+      const r = await fetch("/api/promos", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      advertList = Array.isArray(data.adverts) ? data.adverts : [];
+      populateShowDropdown();
+      renderAdverts();
+    } catch (_) { /* ignore */ }
+  }
+
+  // Build the show dropdown from unique show names across all schedules.
+  function populateShowDropdown() {
+    const sel = byId("advertShow");
+    if (!sel) return;
+    const names = [];
+    const seen = new Set();
+    [].concat(content.showsWeekday || [], content.showsSaturday || [], content.showsSunday || [])
+      .forEach((s) => {
+        const n = (s.show || "").trim();
+        if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); names.push(n); }
+      });
+    names.sort((a, b) => a.localeCompare(b));
+    const current = sel.value;
+    sel.innerHTML = '<option value="">All shows</option>' +
+      names.map((n) => `<option value="${escAttr(n)}">${escHtml(n)}</option>`).join("");
+    if (current) sel.value = current;   // keep selection if still valid
+  }
+
+  function renderAdverts() {
+    const grid = byId("advertGrid");
+    if (!grid) return;
+    if (!advertList.length) {
+      grid.innerHTML = '<p class="edit-hint">No adverts uploaded yet.</p>';
+      return;
+    }
+    grid.innerHTML = advertList.map((a) => `
+      <div class="advert-item">
+        <img src="${a.url}" alt="${escHtml(a.name || "Advert")}" />
+        <div class="advert-item-foot">
+          <span class="advert-item-name">${escHtml(a.name || "Advert")}</span>
+          <button class="btn-ghost advert-del" data-id="${escHtml(a.id)}">Remove</button>
+        </div>
+        <div class="advert-item-show">🎯 ${escHtml(a.show ? a.show : "All shows")}</div>
+      </div>`).join("");
+    grid.querySelectorAll(".advert-del").forEach((b) => {
+      b.onclick = () => deleteAdvert(b.dataset.id);
+    });
+  }
+
+  async function deleteAdvert(id) {
+    if (!confirm("Remove this advert?")) return;
+    try {
+      const r = await fetch("/api/promos/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, id }),
+      });
+      const res = await r.json();
+      if (r.ok && res.ok) { advertList = res.adverts || []; renderAdverts(); }
+      else setState("advertState", res.error || "Failed to remove", false);
+    } catch (_) { setState("advertState", "Can't reach server", false); }
+  }
+
+  const advertForm = byId("advertForm");
+  if (advertForm) {
+    advertForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const fileInput = byId("advertFile");
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return setState("advertState", "Choose an image first.", false);
+      if (file.size > 3 * 1024 * 1024) return setState("advertState", "Image over 3MB.", false);
+      const name = byId("advertName").value.trim();
+      const show = byId("advertShow") ? byId("advertShow").value : "";
+      setState("advertState", "Uploading…");
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const r = await fetch("/api/promos", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, name, show, image: reader.result }),
+          });
+          const res = await r.json();
+          if (r.ok && res.ok) {
+            advertList = res.adverts || [];
+            renderAdverts();
+            setState("advertState", "✓ Uploaded", true);
+            advertForm.reset();
+          } else {
+            setState("advertState", res.error || "Upload failed", false);
+          }
+        } catch (_) { setState("advertState", "Can't reach server", false); }
+      };
+      reader.onerror = () => setState("advertState", "Could not read the file.", false);
+      reader.readAsDataURL(file);
+    });
   }
 
   /* ============ util ============ */

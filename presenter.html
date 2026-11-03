@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
-  <link rel="stylesheet" href="styles.css?v=17" />
-  <link rel="stylesheet" href="presenter.css?v=12" />
+  <link rel="stylesheet" href="styles.css?v=22" />
+  <link rel="stylesheet" href="presenter.css?v=14" />
 </head>
 <body class="presenter-body">
 
@@ -44,6 +44,7 @@
       <button class="ptab active" data-tab="chat">💬 Chat</button>
       <button class="ptab" data-tab="news">📰 News</button>
       <button class="ptab manage-only" data-tab="shows" hidden>🗓 Shows</button>
+      <button class="ptab manage-only" data-tab="adverts" hidden>📢 Adverts</button>
       <button class="ptab" data-tab="members">👥 Members</button>
       <button class="ptab" data-tab="settings">⚙ Settings</button>
     </nav>
@@ -99,6 +100,24 @@
         </div>
       </section>
 
+      <!-- ADVERTS tab (manager only) -->
+      <section class="ptab-view" id="tab-adverts">
+        <div class="edit-card glass">
+          <div class="edit-head"><h2>📢 Adverts</h2></div>
+          <p class="edit-hint">Upload advert images (PNG, JPG, WEBP or GIF — max 3MB each). On the listener site the On Air panel is replaced by an advert for 60s every few minutes, with a different animation each time. Uploads rotate in order. With nothing uploaded, On Air stays put.</p>
+          <form class="advert-upload" id="advertForm" autocomplete="off">
+            <input type="text" id="advertName" placeholder="Advert name (optional)" maxlength="60" />
+            <select id="advertShow" class="advert-show-select">
+              <option value="">All shows</option>
+            </select>
+            <input type="file" id="advertFile" accept="image/png,image/jpeg,image/webp,image/gif" />
+            <button type="submit" class="add-btn" id="advertUploadBtn">⬆ Upload advert</button>
+          </form>
+          <div class="save-state" id="advertState"></div>
+          <div class="advert-grid" id="advertGrid"></div>
+        </div>
+      </section>
+
       <!-- MEMBERS tab (manager only) -->
       <section class="ptab-view" id="tab-members">
         <div class="edit-card glass">
@@ -142,7 +161,7 @@
     </div>
   </div>
 
-  <script src="config.js?v=19"></script>
-  <script src="presenter.js?v=13"></script>
+  <script src="config.js?v=22"></script>
+  <script src="presenter.js?v=15"></script>
 </body>
 </html>

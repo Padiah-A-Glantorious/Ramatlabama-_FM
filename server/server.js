@@ -24,9 +24,17 @@ try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {}
 const CONTENT_FILE = path.join(DATA_DIR, "content.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const CHAT_FILE = path.join(DATA_DIR, "chat.json");
+const ADVERTS_FILE = path.join(DATA_DIR, "promos.json");
+const ADVERTS_DIR = path.join(DATA_DIR, "promos");   // uploaded image files live here
+try { fs.mkdirSync(ADVERTS_DIR, { recursive: true }); } catch (_) {}
 
 // How many recent chat messages to keep and show to anyone who joins.
 const CHAT_HISTORY_MAX = 200;
+
+// Advert upload limits.
+const ADVERT_MAX_BYTES = 3 * 1024 * 1024;   // ~3MB per image
+const ADVERT_MAX_COUNT = 20;                // keep the rotation sane
+const ADVERT_EXT = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
 
 // Default passwords — override in production via environment variables.
 const PRESENTER_PASSWORD_DEFAULT = process.env.PRESENTER_PASSWORD || "presenter2026";
@@ -69,10 +77,32 @@ const DEFAULT_CONTENT = {
 };
 
 function loadJson(file, def) {
-  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
-  catch (_) { fs.writeFileSync(file, JSON.stringify(def, null, 2)); return JSON.parse(JSON.stringify(def)); }
+  // No file yet: create it with defaults.
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file, JSON.stringify(def, null, 2));
+    return JSON.parse(JSON.stringify(def));
+  }
+  let raw;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (_) { return JSON.parse(JSON.stringify(def)); }   // unreadable: use defaults in memory, don't touch the file
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);   // strip BOM
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    // The file exists but is corrupt. Preserve it (don't overwrite real data)
+    // by backing it up, then fall back to defaults in memory.
+    try { fs.copyFileSync(file, file + ".corrupt-" + Date.now() + ".bak"); } catch (_) {}
+    console.error("WARNING: " + file + " was unreadable JSON; backed up and using defaults in memory.");
+    return JSON.parse(JSON.stringify(def));
+  }
 }
-function saveJson(file, obj) { fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
+function saveJson(file, obj) {
+  // Atomic write: write to a temp file, then rename, so a crash mid-write
+  // can never leave a half-written (corrupt) data file on the Disk.
+  const tmp = file + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  fs.renameSync(tmp, file);
+}
 
 let content = loadJson(CONTENT_FILE, DEFAULT_CONTENT);
 // Migrate older shapes to weekday / saturday / sunday.
@@ -141,6 +171,18 @@ function pushChat(msg) {
   saveChatSoon();
 }
 
+/* ================= ADVERTS ================= */
+// Each advert: { id, file, name, ts }. The image bytes live in ADVERTS_DIR/<file>.
+let adverts = loadJson(ADVERTS_FILE, { items: [] });
+if (!Array.isArray(adverts.items)) adverts = { items: [] };
+// Self-heal: drop records whose image file is missing (e.g. after a wipe).
+adverts.items = adverts.items.filter((a) => {
+  try { return fs.existsSync(path.join(ADVERTS_DIR, a.file)); } catch (_) { return false; }
+});
+function saveAdverts() { try { saveJson(ADVERTS_FILE, adverts); } catch (_) {} }
+// show === "" means "All shows"; otherwise it's a specific show name.
+function advertView(a) { return { id: a.id, name: a.name, show: a.show || "", url: "/promos/" + a.file, ts: a.ts }; }
+
 /* Can actor manage/act on target?
    - Only a god may touch a god account.
    - A god may act on anyone else.
@@ -206,6 +248,15 @@ function readBody(req) {
     req.on("end", () => { try { resolve(JSON.parse(d || "{}")); } catch { resolve(null); } });
   });
 }
+// Like readBody but allows a larger payload (for base64 image uploads).
+function readBodyLarge(req, maxBytes) {
+  return new Promise((resolve) => {
+    let d = "", aborted = false;
+    req.on("data", (c) => { d += c; if (d.length > maxBytes) { aborted = true; req.destroy(); } });
+    req.on("end", () => { if (aborted) return resolve(null); try { resolve(JSON.parse(d || "{}")); } catch { resolve(null); } });
+    req.on("error", () => resolve(null));
+  });
+}
 function authUser(body) {   // returns the user for a request token, or null
   return body && body.token ? userFromToken(String(body.token)) : null;
 }
@@ -237,6 +288,68 @@ const httpServer = http.createServer(async (req, res) => {
       showsSaturday: content.showsSaturday || [],
       showsSunday: content.showsSunday || [],
       news: content.news || [],
+    });
+  }
+
+  /* ---- public: list adverts for the listener site to rotate ---- */
+  if (p === "/api/promos" && req.method === "GET") {
+    return sendJson(res, 200, { adverts: adverts.items.map(advertView) });
+  }
+
+  /* ---- upload an advert image (manager only: god/elevated) ---- */
+  if (p === "/api/promos" && req.method === "POST") {
+    const body = await readBodyLarge(req, ADVERT_MAX_BYTES + 1024 * 1024);
+    if (body === null) return sendJson(res, 400, { ok: false, error: "Upload too large or malformed." });
+    const u = authUser(body);
+    if (!u || !canManage(u.role)) return sendJson(res, 403, { ok: false, error: "Not authorized." });
+    if (adverts.items.length >= ADVERT_MAX_COUNT) {
+      return sendJson(res, 400, { ok: false, error: "Advert limit reached. Remove some first." });
+    }
+    // Expect a data URL: "data:image/png;base64,...."
+    const dataUrl = String(body.image || "");
+    const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!m) return sendJson(res, 400, { ok: false, error: "Invalid image data." });
+    const mime = m[1].toLowerCase();
+    const ext = ADVERT_EXT[mime];
+    if (!ext) return sendJson(res, 400, { ok: false, error: "Use PNG, JPG, WEBP or GIF." });
+    let buf;
+    try { buf = Buffer.from(m[2], "base64"); } catch { return sendJson(res, 400, { ok: false, error: "Bad image encoding." }); }
+    if (buf.length > ADVERT_MAX_BYTES) return sendJson(res, 400, { ok: false, error: "Image over 3MB." });
+    const id = "ad" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const file = id + ext;
+    try { fs.writeFileSync(path.join(ADVERTS_DIR, file), buf); }
+    catch { return sendJson(res, 500, { ok: false, error: "Could not save image." }); }
+    const name = sanitize(body.name, 60).trim() || "Advert";
+    const show = sanitize(body.show, 60).trim();   // "" = all shows
+    adverts.items.push({ id, file, name, show, ts: Date.now() });
+    saveAdverts();
+    return sendJson(res, 200, { ok: true, adverts: adverts.items.map(advertView) });
+  }
+
+  /* ---- delete an advert (manager only) ---- */
+  if (p === "/api/promos/delete" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || !canManage(u.role)) return sendJson(res, 403, { ok: false, error: "Not authorized." });
+    const adv = adverts.items.find((a) => a.id === String(body.id));
+    if (adv) {
+      try { fs.unlinkSync(path.join(ADVERTS_DIR, adv.file)); } catch (_) {}
+      adverts.items = adverts.items.filter((a) => a.id !== adv.id);
+      saveAdverts();
+    }
+    return sendJson(res, 200, { ok: true, adverts: adverts.items.map(advertView) });
+  }
+
+  /* ---- serve an uploaded advert image from the Disk ---- */
+  if (p.startsWith("/promos/") && req.method === "GET") {
+    const name = path.basename(decodeURIComponent(p.slice("/promos/".length)));
+    const fp = path.join(ADVERTS_DIR, name);
+    if (!fp.startsWith(ADVERTS_DIR)) { res.writeHead(403); return res.end("Forbidden"); }
+    return fs.readFile(fp, (err, data) => {
+      if (err) { res.writeHead(404); return res.end("Not found"); }
+      const ext = path.extname(fp).toLowerCase();
+      res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream", "Cache-Control": "public, max-age=3600" });
+      res.end(data);
     });
   }
 

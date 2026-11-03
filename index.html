@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Live Radio, News &amp; Community</title>
-  <link rel="stylesheet" href="styles.css?v=17" />
+  <link rel="stylesheet" href="styles.css?v=22" />
 </head>
 <body>
   <!-- ====================== TOP BAR ====================== -->
@@ -69,14 +69,22 @@
           </form>
         </div>
 
-        <!-- INFO sidebar: On Air -->
+        <!-- INFO sidebar: On Air (with advert takeover) -->
         <aside class="info-col">
-          <div class="card glass">
-            <div class="card-head">
-              <h2>🗓 On Air</h2>
-              <span class="card-sub" id="todayLabel"></span>
+          <div class="card glass onair-card" id="onairCard">
+            <!-- On Air view -->
+            <div class="onair-view" id="onairView">
+              <div class="card-head">
+                <h2>🗓 On Air</h2>
+                <span class="card-sub" id="todayLabel"></span>
+              </div>
+              <div class="schedule" id="scheduleList"><!-- injected --></div>
             </div>
-            <div class="schedule" id="scheduleList"><!-- injected --></div>
+            <!-- Promo view (shown on top during the break) -->
+            <div class="spot-view" id="advertView" hidden>
+              <img class="spot-bg" id="advertBg" alt="" aria-hidden="true" />
+              <img class="spot-img" id="advertImg" alt="Advertisement" />
+            </div>
           </div>
         </aside>
       </div>
@@ -86,7 +94,7 @@
   <!-- Persistent audio element (hidden; controlled from the hero) -->
   <audio id="player" preload="none"></audio>
 
-  <script src="config.js?v=19"></script>
-  <script src="app.js?v=19"></script>
+  <script src="config.js?v=22"></script>
+  <script src="app.js?v=22"></script>
 </body>
 </html>

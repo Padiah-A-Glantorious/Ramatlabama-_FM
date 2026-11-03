@@ -468,6 +468,75 @@ body {
 .sched-time { font-weight: 800; font-size: clamp(11px, 1.2vw, 13px); color: var(--muted); }
 .sched-show { font-weight: 600; font-size: clamp(12px, 1.3vw, 14px); }
 .sched-host { font-size: clamp(10px, 1.1vw, 12px); color: var(--faint); }
+
+/* ===================== ADVERT TAKEOVER ===================== */
+/* The On Air card becomes the stage; the advert view overlays it. */
+.onair-card { position: relative; overflow: hidden; }
+
+.spot-view {
+  position: absolute; inset: 0;
+  background: #0a0b0f;
+  border-radius: var(--radius);
+  overflow: hidden;
+  z-index: 3;
+}
+.spot-view[hidden] { display: none; }
+
+/* Blurred fill layer: the same image, scaled to COVER the box, heavily
+   blurred. Fills every corner so there are no empty gaps, without being
+   the "real" advert the eye reads. */
+.spot-bg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  filter: blur(22px) brightness(0.55);
+  transform: scale(1.15);     /* hide blurred edges */
+  z-index: 0;
+}
+
+.spot-badge {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  z-index: 2;
+  font-size: 10px; letter-spacing: 1.5px; font-weight: 800; color: #0a0b0f;
+  background: linear-gradient(90deg,#ffd34d,#ff8a3c); padding: 3px 10px; border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+
+/* Foreground: the FULL advert, nothing cropped, centered over the blur. */
+.spot-img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;        /* show the whole advert — no content lost */
+  object-position: center;
+  display: block;
+  z-index: 1;
+  filter: drop-shadow(0 6px 20px rgba(0,0,0,0.5));
+}
+
+/* --- Entrance effects (one is picked at random each ad break) --- */
+.fx-fade    { animation: adFade .7s ease both; }
+.fx-zoom    { animation: adZoom .7s cubic-bezier(.2,.8,.2,1) both; }
+.fx-slideUp { animation: adSlideUp .7s cubic-bezier(.2,.8,.2,1) both; }
+.fx-slideL  { animation: adSlideL .7s cubic-bezier(.2,.8,.2,1) both; }
+.fx-flip    { animation: adFlip .8s ease both; transform-style: preserve-3d; }
+.fx-blur    { animation: adBlur .8s ease both; }
+.fx-rotate  { animation: adRotate .8s cubic-bezier(.2,.8,.2,1) both; }
+
+/* Exit (fade back to On Air) */
+.fx-out { animation: adOut .55s ease both; }
+
+@keyframes adFade    { from { opacity: 0 } to { opacity: 1 } }
+@keyframes adZoom    { from { opacity: 0; transform: scale(.6) } to { opacity: 1; transform: scale(1) } }
+@keyframes adSlideUp { from { opacity: 0; transform: translateY(40px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes adSlideL  { from { opacity: 0; transform: translateX(60px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes adFlip    { from { opacity: 0; transform: perspective(800px) rotateY(90deg) } to { opacity: 1; transform: perspective(800px) rotateY(0) } }
+@keyframes adBlur    { from { opacity: 0; filter: blur(16px) } to { opacity: 1; filter: blur(0) } }
+@keyframes adRotate  { from { opacity: 0; transform: rotate(-12deg) scale(.7) } to { opacity: 1; transform: rotate(0) scale(1) } }
+@keyframes adOut     { from { opacity: 1 } to { opacity: 0 } }
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-fade,.fx-zoom,.fx-slideUp,.fx-slideL,.fx-flip,.fx-blur,.fx-rotate,.fx-out { animation: adFade .3s ease both; }
+}
 .sched-row.now {
   background: var(--accent-soft);
   border: 1px solid rgba(255,90,54,0.3);

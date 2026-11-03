@@ -23,6 +23,10 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {}
 const CONTENT_FILE = path.join(DATA_DIR, "content.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
+const CHAT_FILE = path.join(DATA_DIR, "chat.json");
+
+// How many recent chat messages to keep and show to anyone who joins.
+const CHAT_HISTORY_MAX = 200;
 
 // Default passwords — override in production via environment variables.
 const PRESENTER_PASSWORD_DEFAULT = process.env.PRESENTER_PASSWORD || "presenter2026";
@@ -114,6 +118,28 @@ const DEFAULT_USERS = {
 };
 let db = loadJson(USERS_FILE, DEFAULT_USERS);
 if (!Array.isArray(db.users)) db = JSON.parse(JSON.stringify(DEFAULT_USERS));
+
+/* ================= CHAT HISTORY ================= */
+// Recent chat messages, persisted so listeners/presenters see the
+// conversation so far when they join. Capped at CHAT_HISTORY_MAX.
+let chatLog = loadJson(CHAT_FILE, { messages: [] });
+if (!Array.isArray(chatLog.messages)) chatLog = { messages: [] };
+let chatSaveTimer = null;
+function saveChatSoon() {
+  // Debounce disk writes so a burst of messages doesn't thrash the Disk.
+  if (chatSaveTimer) return;
+  chatSaveTimer = setTimeout(() => {
+    chatSaveTimer = null;
+    try { saveJson(CHAT_FILE, chatLog); } catch (_) {}
+  }, 1000);
+}
+function pushChat(msg) {
+  chatLog.messages.push(msg);
+  if (chatLog.messages.length > CHAT_HISTORY_MAX) {
+    chatLog.messages = chatLog.messages.slice(-CHAT_HISTORY_MAX);
+  }
+  saveChatSoon();
+}
 
 /* Can actor manage/act on target?
    - Only a god may touch a god account.
@@ -400,14 +426,29 @@ function broadcast(obj) {
 }
 wss.on("connection", (ws) => {
   broadcast({ type: "presence", count: wss.clients.size });
+  // Send the recent conversation so the newcomer sees what came before.
+  ws.send(JSON.stringify({ type: "history", messages: chatLog.messages }));
   ws.send(JSON.stringify({ type: "system", text: "You joined the live chat." }));
   ws.on("message", (raw) => {
     let d; try { d = JSON.parse(raw.toString()); } catch { return; }
+
+    // Presenter/manager action: clear the chat history for everyone.
+    if (d.type === "clear") {
+      const u = d.token ? userFromToken(String(d.token)) : null;
+      if (!u || !canManage(u.role)) return;   // only god/elevated may clear
+      chatLog.messages = [];
+      saveJson(CHAT_FILE, chatLog);
+      broadcast({ type: "cleared", by: sanitize(u.name, 40) });
+      return;
+    }
+
     if (d.type !== "chat") return;
     const name = sanitize(d.name, 24) || "Guest";
     const text = sanitize(d.text, 500);
     if (!text) return;
-    broadcast({ type: "chat", name, text, ts: Date.now() });
+    const msg = { type: "chat", name, text, ts: Date.now() };
+    pushChat({ name, text, ts: msg.ts });   // persist (without the "type" field)
+    broadcast(msg);
   });
   ws.on("close", () => broadcast({ type: "presence", count: wss.clients.size }));
 });

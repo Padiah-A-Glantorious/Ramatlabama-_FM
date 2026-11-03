@@ -371,14 +371,32 @@
       ws = new WebSocket(chatUrl);
       ws.onmessage = (ev) => {
         let d; try { d = JSON.parse(ev.data); } catch { return; }
-        if (d.type === "chat") add(d.name, d.text);
+        if (d.type === "history") {
+          feed.innerHTML = "";
+          (d.messages || []).forEach((m) => add(m.name, m.text));
+          if (!(d.messages || []).length) add(null, "Listener requests appear here.", true);
+        } else if (d.type === "chat") {
+          add(d.name, d.text);
+        } else if (d.type === "cleared") {
+          feed.innerHTML = "";
+          add(null, "Chat cleared" + (d.by ? " by " + d.by : "") + ".", true);
+        }
         // presence (online count) is intentionally ignored — not shown.
       };
       ws.onclose = () => { setTimeout(connect, 2500); };
       ws.onerror = () => ws.close();
     }
     connect();
-    add(null, "Listener requests appear here.", true);
+
+    // "Clear chat" button (managers only — the button is hidden otherwise).
+    const clearBtn = byId("clearChatBtn");
+    if (clearBtn) {
+      clearBtn.onclick = function () {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!confirm("Clear the live chat for everyone? This cannot be undone.")) return;
+        ws.send(JSON.stringify({ type: "clear", token }));
+      };
+    }
   }
 
   /* ============ util ============ */

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=17" />
-  <link rel="stylesheet" href="presenter.css?v=11" />
+  <link rel="stylesheet" href="presenter.css?v=12" />
 </head>
 <body class="presenter-body">
 
@@ -53,7 +53,10 @@
       <!-- CHAT tab (read-only listener feed) -->
       <section class="ptab-view active" id="tab-chat">
         <div class="edit-card glass">
-          <div class="edit-head"><h2>💬 Listener Chat</h2></div>
+          <div class="edit-head">
+            <h2>💬 Listener Chat</h2>
+            <button type="button" class="btn-ghost manage-only" id="clearChatBtn" hidden>Clear chat</button>
+          </div>
           <p class="edit-hint">Live messages from listeners — read requests out on air.</p>
           <div class="pres-messages" id="chatFeed"></div>
         </div>
@@ -139,7 +142,7 @@
     </div>
   </div>
 
-  <script src="config.js?v=18"></script>
-  <script src="presenter.js?v=12"></script>
+  <script src="config.js?v=19"></script>
+  <script src="presenter.js?v=13"></script>
 </body>
 </html>

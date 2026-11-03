@@ -8,7 +8,7 @@
 
 (() => {
   "use strict";
-  console.log("%cRamatlabama FM app build v6 loaded", "color:#ff5a36;font-weight:bold");
+  console.log("%cRamatlabama FM app build v7 loaded", "color:#ff5a36;font-weight:bold");
   const cfg = window.RADIO_CONFIG || {};
 
   /* ===================================================================
@@ -329,11 +329,22 @@
     let ws, myName = null;
 
     function connect() {
+      // Know our own name up front so replayed history aligns our messages right.
+      if (!myName && lockedName) myName = lockedName;
       ws = new WebSocket(url);
       ws.addEventListener("message", (ev) => {
         let d; try { d = JSON.parse(ev.data); } catch { return; }
-        if (d.type === "chat") {
+        if (d.type === "history") {
+          // Replay the recent conversation on (re)connect.
+          messagesEl.innerHTML = "";
+          (d.messages || []).forEach((m) =>
+            addMessage({ name: m.name, text: m.text, mine: m.name === myName })
+          );
+        } else if (d.type === "chat") {
           addMessage({ name: d.name, text: d.text, mine: d.name === myName });
+        } else if (d.type === "cleared") {
+          messagesEl.innerHTML = "";
+          addMessage({ system: true, text: "Chat was cleared by the station." });
         } else if (d.type === "system") {
           addMessage({ system: true, text: d.text });
         } else if (d.type === "content-updated") {

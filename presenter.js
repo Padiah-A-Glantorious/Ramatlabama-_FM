@@ -6,7 +6,7 @@
 
 (() => {
   "use strict";
-  console.log("%cStation Portal v6 loaded", "color:#d4af37;font-weight:bold");
+  console.log("%cStation Portal v7 loaded", "color:#d4af37;font-weight:bold");
   const cfg = window.RADIO_CONFIG || {};
   const byId = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s);
@@ -345,7 +345,18 @@
   /* ============ CHAT FEED (read-only) ============ */
   function connectChat() {
     const feed = byId("chatFeed");
-    if (cfg.chatMode !== "server" || !cfg.chatServerUrl) return;
+    // Derive the chat server URL from the current page so it works on the live
+    // site (wss:// under HTTPS) without any config edit. Falls back to the
+    // configured URL only when opened as a local file.
+    function resolveChatUrl() {
+      const configured = (cfg.chatServerUrl || "").trim();
+      if (location.protocol === "file:") return configured;
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      return `${scheme}//${location.host}`;
+    }
+    if (cfg.chatMode !== "server") return;
+    const chatUrl = resolveChatUrl();
+    if (!chatUrl) return;
     let ws;
     function add(name, text, system) {
       const d = document.createElement("div");
@@ -357,7 +368,7 @@
       feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
     }
     function connect() {
-      ws = new WebSocket(cfg.chatServerUrl);
+      ws = new WebSocket(chatUrl);
       ws.onmessage = (ev) => {
         let d; try { d = JSON.parse(ev.data); } catch { return; }
         if (d.type === "chat") add(d.name, d.text);

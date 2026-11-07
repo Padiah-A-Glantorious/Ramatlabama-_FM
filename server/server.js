@@ -154,6 +154,16 @@ if (!Array.isArray(db.users)) db = JSON.parse(JSON.stringify(DEFAULT_USERS));
 // conversation so far when they join. Capped at CHAT_HISTORY_MAX.
 let chatLog = loadJson(CHAT_FILE, { messages: [] });
 if (!Array.isArray(chatLog.messages)) chatLog = { messages: [] };
+// Messages vanish after CHAT_TTL_MS (7 hours), for everyone.
+const CHAT_TTL_MS = 7 * 60 * 60 * 1000;
+function pruneChat() {
+  const cutoff = Date.now() - CHAT_TTL_MS;
+  const before = chatLog.messages.length;
+  // Messages saved before timestamps existed (no ts) are treated as expired.
+  chatLog.messages = chatLog.messages.filter((m) => m && Number(m.ts) > cutoff);
+  return chatLog.messages.length !== before;
+}
+pruneChat();
 let chatSaveTimer = null;
 function saveChatSoon() {
   // Debounce disk writes so a burst of messages doesn't thrash the Disk.
@@ -537,9 +547,35 @@ function broadcast(obj) {
   const payload = JSON.stringify(obj);
   for (const c of wss.clients) if (c.readyState === 1) c.send(payload);
 }
+/* ---------- Call-in (WebRTC signalling) ----------
+   Audio itself flows peer-to-peer between the listener and the presenter's
+   browser. The server only relays the small setup messages (offer/answer/ICE)
+   and keeps the waiting queue. */
+let nextWsId = 1;
+function sendTo(ws, obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function pushCallQueue() {
+  const queue = [];
+  for (const c of wss.clients) {
+    if (c.readyState === 1 && c.callState === "waiting") queue.push({ id: c.id, name: c.callName, since: c.callSince });
+  }
+  queue.sort((a, b) => a.since - b.since);
+  for (const c of wss.clients) if (c.readyState === 1 && c.staff) sendTo(c, { type: "call-queue", queue });
+}
+function endCall(ws, notify) {
+  const peer = ws.peer;
+  ws.peer = null; ws.callState = null;
+  if (peer) {
+    peer.peer = null; peer.callState = null;
+    if (notify) sendTo(peer, { type: "call-ended" });
+  }
+}
+
 wss.on("connection", (ws) => {
+  ws.id = String(nextWsId++);
+  ws.staff = null; ws.peer = null; ws.callState = null;
   broadcast({ type: "presence", count: wss.clients.size });
   // Send the recent conversation so the newcomer sees what came before.
+  pruneChat();
   ws.send(JSON.stringify({ type: "history", messages: chatLog.messages }));
   ws.send(JSON.stringify({ type: "system", text: "You joined the live chat." }));
   ws.on("message", (raw) => {
@@ -555,7 +591,58 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    /* ---- call-in signalling ---- */
+    if (d.type === "staff-hello") {
+      const u = d.token ? userFromToken(String(d.token)) : null;
+      if (!u) return;
+      ws.staff = { name: u.name, role: u.role };
+      sendTo(ws, { type: "staff-ok" });
+      pushCallQueue();
+      return;
+    }
+    if (d.type === "call-request") {
+      if (ws.staff || ws.callState) return;
+      if (Date.now() - (ws.lastCallReq || 0) < 3000) return;   // tiny rate limit
+      ws.lastCallReq = Date.now();
+      ws.callState = "waiting";
+      ws.callName = sanitize(d.name, 24) || "Caller";
+      ws.callSince = Date.now();
+      sendTo(ws, { type: "call-status", state: "waiting" });
+      pushCallQueue();
+      return;
+    }
+    if (d.type === "call-cancel") {
+      if (ws.callState === "waiting") { ws.callState = null; sendTo(ws, { type: "call-status", state: "idle" }); pushCallQueue(); }
+      return;
+    }
+    if (d.type === "call-accept") {
+      if (!ws.staff || ws.peer) return;                       // staff only, one call at a time
+      let target = null;
+      for (const c of wss.clients) if (c.id === String(d.id) && c.callState === "waiting" && c.readyState === 1) target = c;
+      if (!target) { sendTo(ws, { type: "call-gone" }); pushCallQueue(); return; }
+      ws.peer = target; target.peer = ws;
+      ws.callState = target.callState = "live";
+      sendTo(target, { type: "call-accepted", host: ws.staff.name });
+      sendTo(ws, { type: "call-live", id: target.id, name: target.callName });
+      pushCallQueue();
+      return;
+    }
+    if (d.type === "rtc") {
+      if (!ws.peer) return;
+      const data = d.data;
+      if (!data || typeof data !== "object" || JSON.stringify(data).length > 20000) return;
+      sendTo(ws.peer, { type: "rtc", data });
+      return;
+    }
+    if (d.type === "call-end") {
+      if (ws.callState === "live") endCall(ws, true);
+      else if (ws.callState === "waiting") { ws.callState = null; pushCallQueue(); }
+      sendTo(ws, { type: "call-ended" });
+      return;
+    }
+
     if (d.type !== "chat") return;
+    if (ws.staff) return;   // presenter sockets are read-only: no typed replies
     const name = sanitize(d.name, 24) || "Guest";
     const text = sanitize(d.text, 500);
     if (!text) return;
@@ -563,8 +650,22 @@ wss.on("connection", (ws) => {
     pushChat({ name, text, ts: msg.ts });   // persist (without the "type" field)
     broadcast(msg);
   });
-  ws.on("close", () => broadcast({ type: "presence", count: wss.clients.size }));
+  ws.on("close", () => {
+    const wasWaiting = ws.callState === "waiting";
+    if (ws.peer) endCall(ws, true);
+    ws.callState = null;
+    if (wasWaiting) pushCallQueue();
+    broadcast({ type: "presence", count: wss.clients.size });
+  });
 });
+
+// Every minute, drop expired messages and refresh everyone's chat view.
+setInterval(() => {
+  if (pruneChat()) {
+    saveChatSoon();
+    broadcast({ type: "history", messages: chatLog.messages });
+  }
+}, 60 * 1000);
 
 httpServer.listen(PORT, () => {
   console.log(`\n  Ramatlabama FM server running: http://localhost:${PORT}`);

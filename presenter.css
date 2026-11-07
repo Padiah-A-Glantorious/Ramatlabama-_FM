@@ -174,3 +174,26 @@
   .setting-row input, .setting-row.col input { width: 100%; }
   .save-row { flex-wrap: wrap; }
 }
+
+/* ---------- Studio tab ---------- */
+.qbadge:not(:empty) { display: inline-block; min-width: 18px; padding: 0 6px; margin-left: 4px; border-radius: 999px; background: #c0392b; color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }
+.studio-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.queue-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; margin-bottom: 8px; border-radius: 11px; background: rgba(44,44,48,0.85); border: 1px solid var(--glass-border); }
+.queue-who { display: flex; flex-direction: column; }
+.queue-who small { color: var(--muted); font-size: 12px; }
+.add-btn:disabled { opacity: .45; cursor: not-allowed; }
+.live-call[hidden] { display: none; }
+#noLive:has(+ .live-call:not([hidden])) { display: none; }
+.live-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.live-top strong { display: block; font-size: 16px; }
+.live-top small { color: var(--muted); font-size: 12px; }
+.live-timer { font-variant-numeric: tabular-nums; font-weight: 800; color: #ff6b5e; }
+.meter { height: 10px; border-radius: 6px; background: rgba(0,0,0,0.35); overflow: hidden; margin-bottom: 12px; }
+.meter-bar { height: 100%; width: 0; background: linear-gradient(90deg, #3ecf6b, #e8c547 70%, #ff6b5e); transition: width .06s linear; }
+.live-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.btn-danger { border: 0; cursor: pointer; padding: 9px 16px; border-radius: 9px; background: #c0392b; color: #fff; font-weight: 800; font-size: 13px; }
+.btn-danger:hover { filter: brightness(1.1); }
+.guide { margin: 0 0 12px; padding-left: 20px; font-size: 13.5px; line-height: 1.6; }
+.pres-reply { display: flex; gap: 8px; margin-top: 12px; }
+.pres-reply input { flex: 1; background: rgba(0,0,0,0.25); border: 1px solid var(--glass-border); color: var(--text); border-radius: 9px; padding: 9px 12px; font-size: 13px; outline: none; }
+.pres-reply input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(212,175,55,0.18); }

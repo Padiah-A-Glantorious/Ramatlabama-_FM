@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
-  <link rel="stylesheet" href="styles.css?v=22" />
-  <link rel="stylesheet" href="presenter.css?v=14" />
+  <link rel="stylesheet" href="styles.css?v=23" />
+  <link rel="stylesheet" href="presenter.css?v=15" />
 </head>
 <body class="presenter-body">
 
@@ -42,6 +42,7 @@
     <!-- Tabs -->
     <nav class="portal-tabs" id="portalTabs">
       <button class="ptab active" data-tab="chat">💬 Chat</button>
+      <button class="ptab" data-tab="studio">🎙 Studio <span class="qbadge" id="queueCount"></span></button>
       <button class="ptab" data-tab="news">📰 News</button>
       <button class="ptab manage-only" data-tab="shows" hidden>🗓 Shows</button>
       <button class="ptab manage-only" data-tab="adverts" hidden>📢 Adverts</button>
@@ -58,8 +59,50 @@
             <h2>💬 Listener Chat</h2>
             <button type="button" class="btn-ghost manage-only" id="clearChatBtn" hidden>Clear chat</button>
           </div>
-          <p class="edit-hint">Live messages from listeners — read requests out on air.</p>
+          <p class="edit-hint">Live messages from listeners — read requests out on air. Messages disappear after 7 hours.</p>
           <div class="pres-messages" id="chatFeed"></div>
+        </div>
+      </section>
+
+      <!-- STUDIO tab: take listener calls in the browser -->
+      <section class="ptab-view" id="tab-studio">
+        <div class="studio-grid">
+          <div class="edit-card glass">
+            <div class="edit-head"><h2>📞 Caller queue</h2></div>
+            <p class="edit-hint">Listeners tap "Call the studio" on the website and wait here. Wear headphones, or the caller will hear themselves.</p>
+            <div class="call-queue" id="callQueue"><p class="edit-empty">No callers waiting.</p></div>
+            <div class="save-state" id="studioState"></div>
+          </div>
+
+          <div class="edit-card glass">
+            <div class="edit-head"><h2>🔴 On the line</h2></div>
+            <p class="edit-empty" id="noLive">Nobody on the line.</p>
+            <div class="live-call" id="liveCall" hidden>
+              <div class="live-top">
+                <div><strong id="liveName"></strong><small id="liveStatus"></small></div>
+                <span class="live-timer" id="liveTimer">00:00</span>
+              </div>
+              <div class="meter"><div class="meter-bar" id="meterBar"></div></div>
+              <div class="live-actions">
+                <button type="button" class="add-btn" id="muteCallerBtn">🔇 Mute caller</button>
+                <button type="button" class="btn-danger" id="hangupBtn">⏹ Hang up</button>
+              </div>
+            </div>
+            <audio id="studioCallAudio" autoplay></audio>
+          </div>
+
+          <div class="edit-card glass studio-guide">
+            <div class="edit-head"><h2>🎚 Put callers on air</h2></div>
+            <p class="edit-hint">You're already live in Miradio. Do this once, before any caller phones in:</p>
+            <ol class="guide">
+              <li>In Miradio, click <b>TAB</b> (top right, next to TALK).</li>
+              <li>Choose the <b>Chrome Tab</b> section and pick <b>this portal tab</b>.</li>
+              <li>Tick <b>Also share tab audio</b>, then click <b>Share</b>.</li>
+              <li>Done. Every caller you take here now goes on air. Your voice stays on Miradio's <b>MIC</b>.</li>
+            </ol>
+            <p class="edit-hint">Keep this tab open for the whole show. Use <b>Mute caller</b> to take a caller off air. If you close or refresh this tab, share it again.</p>
+            <p class="edit-hint">The stream runs 10 to 30 seconds behind real time. Ask callers to turn their radio off.</p>
+          </div>
         </div>
       </section>
 
@@ -162,6 +205,7 @@
   </div>
 
   <script src="config.js?v=22"></script>
-  <script src="presenter.js?v=15"></script>
+  <script src="studio.js?v=1"></script>
+  <script src="presenter.js?v=17"></script>
 </body>
 </html>

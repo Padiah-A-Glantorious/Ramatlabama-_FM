@@ -94,6 +94,7 @@
     renderShows();
     loadMembers();     // everyone can view the members list
     connectChat();
+    if (window.RFM_STUDIO) window.RFM_STUDIO.start(token);
     if (isManager()) loadAdverts();
   }
 
@@ -370,6 +371,8 @@
     }
     function connect() {
       ws = new WebSocket(chatUrl);
+      // Mark this socket as staff so the server treats the portal chat as read-only.
+      ws.onopen = () => ws.send(JSON.stringify({ type: "staff-hello", token }));
       ws.onmessage = (ev) => {
         let d; try { d = JSON.parse(ev.data); } catch { return; }
         if (d.type === "history") {

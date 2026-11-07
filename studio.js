@@ -81,6 +81,7 @@
       const needBtn = (on) => { const b = byId("enableSoundBtn"); if (b) b.hidden = !on; };
       a.play().then(() => needBtn(false)).catch(() => needBtn(true));   // autoplay blocked -> show button
       startMeter(e.streams[0]);
+      startDiag();
     };
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: "rtc", data: { candidate: e.candidate } }); };
     pc.onconnectionstatechange = () => {
@@ -121,7 +122,7 @@
     if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
     if (pendingMic) { pendingMic.getTracks().forEach((t) => t.stop()); pendingMic = null; }
     const a = el.audio(); if (a) a.srcObject = null;
-    stopMeter();
+    stopMeter(); stopDiag();
     clearInterval(timerId); timerId = 0;
     current = null;
     if (el.live()) el.live().hidden = true;
@@ -130,6 +131,46 @@
   }
 
   function hangUp() { send({ type: "call-end" }); endLocal("Call ended."); }
+
+  /* ---------- diagnostics: what is actually arriving? ---------- */
+  let diagId = 0, lastBytes = 0;
+  function startDiag() {
+    stopDiag(); lastBytes = 0;
+    diagId = setInterval(async () => {
+      const d = byId("liveDiag"); if (!d || !pc) return;
+      let kbps = 0, level = null, packets = 0;
+      try {
+        const stats = await pc.getStats();
+        stats.forEach((r) => {
+          if (r.type === "inbound-rtp" && (r.kind === "audio" || r.mediaType === "audio")) {
+            kbps = Math.round(((r.bytesReceived - lastBytes) * 8) / 1000);
+            lastBytes = r.bytesReceived; packets = r.packetsReceived;
+            if (typeof r.audioLevel === "number") level = r.audioLevel;
+          }
+        });
+      } catch (_) {}
+      const a = el.audio();
+      const playing = a && !a.paused && !a.muted && a.volume > 0;
+      d.textContent = "Receiving " + kbps + " kbps · caller level " +
+        (level == null ? "n/a" : Math.round(level * 100) + "%") +
+        " · player " + (playing ? "playing" : (a && a.muted ? "MUTED" : "NOT playing"));
+    }, 1000);
+  }
+  function stopDiag() {
+    clearInterval(diagId); diagId = 0;
+    const d = byId("liveDiag"); if (d) d.textContent = "";
+  }
+
+  function testBeep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.frequency.value = 660; g.gain.value = 0.2;
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(); setTimeout(() => { osc.stop(); ctx.close(); }, 600);
+      toast("Beep sent. If you didn't hear it, check your speakers or tab volume.");
+    } catch (_) { toast("Couldn't play a test beep in this browser."); }
+  }
 
   /* ---------- level meter ---------- */
   function startMeter(stream) {
@@ -179,6 +220,7 @@
   /* ---------- controls ---------- */
   document.addEventListener("click", (e) => {
     if (e.target && e.target.id === "hangupBtn") hangUp();
+    if (e.target && e.target.id === "testBeepBtn") testBeep();
     if (e.target && e.target.id === "enableSoundBtn") {
       const a = el.audio(); a.muted = false;
       a.play().then(() => { e.target.hidden = true; }).catch(() => {});

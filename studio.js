@@ -8,7 +8,10 @@
   "use strict";
   const byId = (id) => document.getElementById(id);
   const cfg = window.RADIO_CONFIG || {};
-  const iceServers = cfg.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+  let iceServers = cfg.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+  fetch("/api/ice", { cache: "no-store" }).then((r) => r.json())
+    .then((j) => { if (j && Array.isArray(j.iceServers) && j.iceServers.length) iceServers = j.iceServers; })
+    .catch(() => {});
   const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
 
   let ws = null, token = null;
@@ -74,7 +77,9 @@
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
     pc.ontrack = (e) => {
       const a = el.audio(); a.srcObject = e.streams[0];
-      a.muted = false; a.play().catch(() => {});
+      a.muted = false; a.volume = 1;
+      const needBtn = (on) => { const b = byId("enableSoundBtn"); if (b) b.hidden = !on; };
+      a.play().then(() => needBtn(false)).catch(() => needBtn(true));   // autoplay blocked -> show button
       startMeter(e.streams[0]);
     };
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: "rtc", data: { candidate: e.candidate } }); };
@@ -174,6 +179,11 @@
   /* ---------- controls ---------- */
   document.addEventListener("click", (e) => {
     if (e.target && e.target.id === "hangupBtn") hangUp();
+    if (e.target && e.target.id === "enableSoundBtn") {
+      const a = el.audio(); a.muted = false;
+      a.play().then(() => { e.target.hidden = true; }).catch(() => {});
+      if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    }
     if (e.target && e.target.id === "muteCallerBtn") {
       const a = el.audio(); a.muted = !a.muted;
       e.target.textContent = a.muted ? "🔊 Unmute caller" : "🔇 Mute caller";

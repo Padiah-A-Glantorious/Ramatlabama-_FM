@@ -149,6 +149,19 @@ const DEFAULT_USERS = {
 let db = loadJson(USERS_FILE, DEFAULT_USERS);
 if (!Array.isArray(db.users)) db = JSON.parse(JSON.stringify(DEFAULT_USERS));
 
+/* ================= CALL-IN ICE SERVERS ================= */
+// STUN alone fails for many callers on mobile data. Add a TURN relay by setting
+// the ICE_SERVERS env var on Render to a JSON array, e.g.
+// [{"urls":"turn:host:443","username":"u","credential":"p"}]
+let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+try {
+  const raw = process.env.ICE_SERVERS;
+  if (raw) {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length) ICE_SERVERS = parsed;
+  }
+} catch (_) { console.warn("ICE_SERVERS env var is not valid JSON; using default STUN."); }
+
 /* ================= CHAT HISTORY ================= */
 // Recent chat messages, persisted so listeners/presenters see the
 // conversation so far when they join. Capped at CHAT_HISTORY_MAX.
@@ -299,6 +312,11 @@ const httpServer = http.createServer(async (req, res) => {
       showsSunday: content.showsSunday || [],
       news: content.news || [],
     });
+  }
+
+  /* ---- public: ICE servers for call-in (STUN + optional TURN from env) ---- */
+  if (p === "/api/ice" && req.method === "GET") {
+    return sendJson(res, 200, { iceServers: ICE_SERVERS });
   }
 
   /* ---- public: list adverts for the listener site to rotate ---- */

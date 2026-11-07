@@ -16,7 +16,10 @@
   if (!supported) { btn.hidden = true; return; }
 
   const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
-  const iceServers = cfg.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+  let iceServers = cfg.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+  fetch("/api/ice", { cache: "no-store" }).then((r) => r.json())
+    .then((j) => { if (j && Array.isArray(j.iceServers) && j.iceServers.length) iceServers = j.iceServers; })
+    .catch(() => {});
 
   let ws = null, pc = null, micStream = null;
   let state = "idle";   // idle | waiting | live
@@ -81,7 +84,15 @@
 
     pc = new RTCPeerConnection({ iceServers });
     micStream.getTracks().forEach((t) => pc.addTrack(t, micStream));
-    pc.ontrack = (e) => { audio.srcObject = e.streams[0]; audio.play().catch(() => {}); };
+    pc.ontrack = (e) => {
+      audio.srcObject = e.streams[0]; audio.muted = false; audio.volume = 1;
+      audio.play().catch(() => {
+        // Autoplay blocked: let the caller start the sound with one tap.
+        statusEl.textContent = "Tap here to hear the presenter.";
+        statusEl.style.cursor = "pointer";
+        statusEl.onclick = () => { audio.play().then(() => { statusEl.onclick = null; statusEl.style.cursor = ""; statusEl.textContent = "You're live. Use headphones and keep the radio off."; }).catch(() => {}); };
+      });
+    };
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: "rtc", data: { candidate: e.candidate } }); };
     pc.onconnectionstatechange = () => {
       if (pc && (pc.connectionState === "failed")) {

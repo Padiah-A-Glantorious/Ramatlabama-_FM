@@ -934,3 +934,13 @@ body {
 .call-status { flex: 0 0 auto; margin: 0 2px 8px; padding: 8px 12px; border-radius: 10px;
   background: rgba(212,175,55,0.14); color: var(--text, #fff); font-size: 12.5px; font-weight: 600; }
 .call-status[hidden] { display: none; }
+
+/* ---------- Phones: stop the browser zooming in when a text box is tapped ---------- */
+/* Browsers auto-zoom inputs under 16px and stay zoomed after the keyboard closes. */
+@media (max-width: 860px), (pointer: coarse) {
+  .composer input,
+  .modal input,
+  input[type="text"],
+  input[type="email"],
+  input[type="password"] { font-size: 16px !important; }
+}

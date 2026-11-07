@@ -490,3 +490,29 @@
     };
   }
 })();
+
+/* Phones: when the keyboard closes, snap the page back into place so the
+   user never has to pinch/scroll to re-fit the screen. */
+(() => {
+  "use strict";
+  const isTouch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  if (!isTouch) return;
+  document.addEventListener("focusout", (e) => {
+    if (!e.target || !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active && /^(INPUT|TEXTAREA)$/.test(active.tagName)) return;   // moved to another box
+      window.scrollTo(0, 0);
+      const vv = window.visualViewport;
+      if (vv && vv.scale > 1) {
+        // Re-fit if the browser left the page zoomed in.
+        const m = document.querySelector('meta[name="viewport"]');
+        if (m) {
+          const orig = m.getAttribute("content");
+          m.setAttribute("content", "width=device-width, initial-scale=1.0, maximum-scale=1.0");
+          setTimeout(() => m.setAttribute("content", orig), 300);
+        }
+      }
+    }, 150);
+  });
+})();

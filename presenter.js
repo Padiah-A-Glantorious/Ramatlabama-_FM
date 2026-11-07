@@ -392,7 +392,7 @@
     }
     connect();
 
-    // "Clear chat" button (managers only — the button is hidden otherwise).
+    // "Clear chat" button (available to every presenter).
     const clearBtn = byId("clearChatBtn");
     if (clearBtn) {
       clearBtn.onclick = function () {

@@ -602,7 +602,7 @@ wss.on("connection", (ws) => {
     // Presenter/manager action: clear the chat history for everyone.
     if (d.type === "clear") {
       const u = d.token ? userFromToken(String(d.token)) : null;
-      if (!u || !canManage(u.role)) return;   // only god/elevated may clear
+      if (!u) return;   // any logged-in staff member (presenters included) may clear
       chatLog.messages = [];
       saveJson(CHAT_FILE, chatLog);
       broadcast({ type: "cleared", by: sanitize(u.name, 40) });

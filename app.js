@@ -74,10 +74,27 @@
   let curId = null;                // id of the uploaded song now playing
 
   /* ---- Radio goes quiet while a rendered video plays its sound (display.js calls this) ---- */
+  // Fill-in music pauses (and later carries on where it was); a live show is only
+  // muted, so the stream connection isn't dropped.
   let ducked = false;
   function applyDuck() {
-    player.muted = ducked;
-    if (yt) { try { if (ducked) yt.mute(); else yt.unMute(); } catch (_) {} }
+    if (ducked) {
+      if (mode === "music" && !player.paused) { try { player.pause(); } catch (_) {} }
+      if (mode === "yt" && yt) { try { yt.pauseVideo(); } catch (_) {} }
+      player.muted = mode === "live";
+      setStatus("⏸ Paused for the video");
+    } else {
+      player.muted = false;
+      if (yt) { try { yt.unMute(); } catch (_) {} }
+      if (intent) {
+        if (mode === "music" && player.paused && player.getAttribute("src") && !player.ended) player.play().catch(onPlayReject);
+        else if (mode === "yt" && yt) { try { yt.playVideo(); } catch (_) {} }
+        else if (mode === "music" && player.ended) { if (!nextFill()) offAirIdle(); }
+      }
+      if (mode === "live") setStatus("● LIVE");
+      else if (nowTitle) setStatus("♪ " + nowTitle);
+    }
+    setButton(); setPill();
   }
   window.RFM_RADIO = { duck(on) { if (ducked === !!on) return; ducked = !!on; applyDuck(); } };
 
@@ -153,7 +170,7 @@
         events: {
           onReady: (e) => {
             try { e.target.setVolume(Math.round(player.volume * 100)); } catch (_) {}
-            if (ducked) { try { e.target.mute(); } catch (_) {} }
+            if (ducked) return;   // a video is playing with sound: wait (applyDuck starts it after)
             try { e.target.playVideo(); } catch (_) {}
             // Phones may refuse to start without a tap: say so instead of sitting silent.
             ytTimer = setTimeout(() => { if (mode === "yt" && ytItem === item && !ytPlaying()) armFirstInteractionAutoplay(); }, 5000);
@@ -162,6 +179,7 @@
             if (mode !== "yt" || ytItem !== item) return;
             const S = window.YT.PlayerState;
             if (e.data === S.PLAYING) {
+              if (ducked) { try { e.target.pauseVideo(); } catch (_) {} return; }   // video has the floor
               musicErrors = 0; intent = true;
               if (seekTo) {   // after a refresh: jump back to where the song was
                 const at = seekTo; seekTo = 0;
@@ -187,8 +205,8 @@
             } else if (e.data === S.BUFFERING) {
               setButton(); setPill();
             } else if (e.data === S.PAUSED) {
-              // Listeners can't pause the fill-in music: carry on playing.
-              if (intent) { try { e.target.playVideo(); } catch (_) {} }
+              // Listeners can't pause the fill-in music: carry on playing (unless a video has the floor).
+              if (intent && !ducked) { try { e.target.playVideo(); } catch (_) {} }
             } else if (e.data === S.ENDED) {
               if (item.kind === "playlist") {
                 try { const pl = e.target.getPlaylist() || []; if (pl.length && e.target.getPlaylistIndex() < pl.length - 1) return; } catch (_) {}
@@ -232,6 +250,10 @@
     heroPlay.classList.toggle("is-locked", playing && music);
     heroPlay.setAttribute("aria-disabled", playing && music ? "true" : "false");
     heroPlay.textContent = playing ? (music ? "♪ Music playing" : "⏸ Playing Live") : "▶ Listen Live";
+    if (ducked && intent) {   // music paused for a video: just a label, nothing to click
+      heroPlay.classList.add("is-locked"); heroPlay.setAttribute("aria-disabled", "true");
+      heroPlay.textContent = "▶ Video playing";
+    }
   }
   function fillPoolSize() {   // how many songs/links can play right now
     return musicCache.tracks.length + (ytBlocked || Date.now() < ytDownUntil ? 0 : musicCache.links.length);
@@ -330,6 +352,7 @@
   setInterval(() => { if (intent && onAir === false && (mode === "music" || mode === "yt")) refreshMusic(); }, 60000);
 
   function togglePlay() {
+    if (ducked && intent) return;   // a rendered video has the sound right now
     if (intent && isPlaying()) {
       if (mode === "music" || mode === "yt") return;   // fill-in music can't be paused
       intent = false; clearTimeout(retryTimer);
@@ -390,13 +413,16 @@
   player.addEventListener("playing", () => {
     switching = false;
     if (mode === "yt") return;
+    // A new song started while a video has the floor (e.g. presenter went off air): hold it.
+    if (ducked && mode === "music") { try { player.pause(); } catch (_) {} return; }
+    if (ducked) { player.muted = true; setButton(); setPill(); return; }
     if (mode === "music") { musicErrors = 0; setStatus("♪ " + nowTitle); }
     else setStatus("● LIVE");
     setButton(); setPill();
   });
   player.addEventListener("pause", () => {
-    // Ignore pauses we cause by changing songs or handing over to YouTube.
-    if (switching || player.ended || mode === "yt") return;
+    // Ignore pauses we cause by changing songs, handing over to YouTube, or for a video.
+    if (switching || player.ended || mode === "yt" || ducked) return;
     // Fill-in music can't be paused (e.g. by headphone/keyboard media keys): resume it.
     if (mode === "music" && intent) { setTimeout(() => { if (mode === "music" && player.paused && !player.ended) player.play().catch(onPlayReject); }, 0); return; }
     intent = false; clearTimeout(retryTimer);

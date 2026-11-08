@@ -53,17 +53,23 @@
     return sel;
   }
 
+  function statusLine() {
+    const live = state.onAirKnown ? (state.onAir ? "A presenter is LIVE now, so listeners hear the show." : "Nobody is live now.") : "Checking if anyone is live…";
+    if (!state.enabled) return say("musicStatus", "Off. Listeners hear silence while nobody is live. " + live);
+    const g = state.genreNow || "", p = state.playingNow != null ? state.playingNow : g;
+    const when = " Now (" + dayName(state.today) + " " + state.time + "): ";
+    if (!countFor(p)) return say("musicStatus", live + when + (g || "all music") + ". ⚠ No music uploaded yet, so listeners hear nothing.", false);
+    if (p !== g) return say("musicStatus", live + when + "scheduled " + (g || "all music") + ", but there's no " + (g || "") + " music yet, so " + (p || "any music") + " plays instead (" + countFor(p) + " songs/links).");
+    say("musicStatus", live + when + (g || "all music") + " · " + countFor(g) + " songs/links.");
+  }
+
   /* ---------- render ---------- */
   function renderAll() {
     if (!state) return;
     if (!draft) draft = freshDraft();
     byId("musicEnabled").checked = !!state.enabled;
 
-    const live = state.onAirKnown ? (state.onAir ? "A presenter is LIVE now, so listeners hear the show." : "Nobody is live now.") : "Checking if anyone is live…";
-    const g = state.genreNow || "";
-    say("musicStatus", !state.enabled
-      ? "Off. Listeners hear silence while nobody is live. " + live
-      : live + " Now (" + dayName(state.today) + " " + state.time + "): " + (g || "all music") + " · " + countFor(g) + " songs/links.");
+    statusLine();
 
     const dl = byId("musicGenreList"); dl.innerHTML = "";
     state.genres.forEach((x) => { const o = document.createElement("option"); o.value = x; dl.appendChild(o); });
@@ -270,10 +276,7 @@
           if (document.hidden || !state) return;
           api("/api/music/admin", {}).then((s) => {
             state = s;
-            const live = state.onAirKnown ? (state.onAir ? "A presenter is LIVE now, so listeners hear the show." : "Nobody is live now.") : "Checking if anyone is live…";
-            const g = state.genreNow || "";
-            say("musicStatus", !state.enabled ? "Off. Listeners hear silence while nobody is live. " + live
-              : live + " Now (" + dayName(state.today) + " " + state.time + "): " + (g || "all music") + " · " + countFor(g) + " songs/links.");
+            statusLine();
           }).catch(() => {});
         }, 20000);
       }

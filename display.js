@@ -24,12 +24,13 @@
   function buildVideo(d, muted, inner) {
     const box = el("div", "display-video");
     const f = document.createElement("iframe");
+    const wantSound = !muted;
     const q = new URLSearchParams({
       autoplay: "1", controls: "0", disablekb: "1", fs: "0", rel: "0", playsinline: "1",
       modestbranding: "1", iv_load_policy: "3", cc_load_policy: "0", enablejsapi: "1",
       origin: location.origin,
+      mute: "1",   // always start muted (browsers always allow that), then switch the sound on
     });
-    if (muted) q.set("mute", "1");
     if (d.start) q.set("start", String(d.start));
     f.src = YT_ORIGIN + "/embed/" + encodeURIComponent(d.videoId) + "?" + q.toString();
     f.title = d.caption || "Video from the station";
@@ -50,18 +51,60 @@
     const post = (obj) => { try { f.contentWindow.postMessage(JSON.stringify(obj), YT_ORIGIN); } catch (_) {} };
 
     let played = false, timer = 0, hs = [];
+    let state = -1, ytMuted = null;      // latest player state / mute flag reported by YouTube
+    let soundOn = false, trying = false, checkT = 0, gestureArmed = false;
+    const cmd = (func, args) => post({ event: "command", func, args: args || [] });
+
+    // Switch the sound on. Only once YouTube confirms it plays with sound does the
+    // radio pause; if the browser refuses, keep playing silently (radio carries on)
+    // and try again on the visitor's next tap or key press.
+    function tryUnmute() {
+      if (!wantSound || soundOn || trying) return;
+      trying = true;
+      cmd("unMute"); cmd("setVolume", [100]);
+      clearTimeout(checkT);
+      checkT = setTimeout(() => {
+        trying = false;
+        if (state === 1 && ytMuted !== true) { soundOn = true; radio(true); return; }
+        // Blocked: browsers pause a video whose sound wasn't allowed. Go back to silent.
+        cmd("mute"); cmd("playVideo");
+        armGesture();
+      }, 1500);
+    }
+    function onGesture() { disarmGesture(); tryUnmute(); }
+    function armGesture() {
+      if (gestureArmed) return; gestureArmed = true;
+      ["pointerdown", "keydown", "touchend"].forEach((e) => window.addEventListener(e, onGesture, { passive: true }));
+    }
+    function disarmGesture() {
+      if (!gestureArmed) return; gestureArmed = false;
+      ["pointerdown", "keydown", "touchend"].forEach((e) => window.removeEventListener(e, onGesture));
+    }
+
     const onMsg = (ev) => {
       if (ev.origin !== YT_ORIGIN || ev.source !== f.contentWindow) return;
       let data = ev.data;
       if (typeof data === "string") { try { data = JSON.parse(data); } catch (_) { return; } }
       if (!data) return;
-      let state = null;
-      if (data.event === "onStateChange" && typeof data.info === "number") state = data.info;
-      else if (data.event === "infoDelivery" && data.info && typeof data.info.playerState === "number") state = data.info.playerState;
-      // A video with sound quiets the radio while it plays; the radio returns when it ends.
-      if (data.event === "onReady" || data.event === "initialDelivery") armWatchdog(4500);   // player loaded: now give it time to start
-      if (state === 1) { played = true; ended.hidden = true; if (!muted) radio(true); }
-      if (state === 0) { ended.hidden = false; radio(false); }
+      let st = null;
+      if (data.event === "onStateChange" && typeof data.info === "number") st = data.info;
+      else if (data.event === "infoDelivery" && data.info) {
+        if (typeof data.info.playerState === "number") st = data.info.playerState;
+        if (typeof data.info.muted === "boolean") ytMuted = data.info.muted;
+      }
+      if (data.event === "onReady" || data.event === "initialDelivery") armWatchdog(8000);   // player loaded: now give it time to start
+      if (st === null) return;
+      state = st;
+      if (st === 1) {
+        ended.hidden = true;
+        if (!played) { played = true; tryUnmute(); }
+      } else if (st === 2 && !trying) {
+        // Nobody can pause it (controls are off): the browser paused it, e.g. over sound.
+        if (soundOn) { soundOn = false; radio(false); cmd("mute"); armGesture(); }
+        cmd("playVideo");
+      } else if (st === 0) {
+        ended.hidden = false; soundOn = false; disarmGesture(); radio(false);   // radio carries on
+      }
     };
     window.addEventListener("message", onMsg);
 
@@ -69,29 +112,18 @@
     const hello = () => post({ event: "listening", id: 1, channel: "widget" });
     f.addEventListener("load", () => { hello(); hs.push(setTimeout(hello, 600), setTimeout(hello, 1800)); });
 
-    // Watchdog: if the browser blocked autoplay, retry muted; if still stuck, let the viewer tap play.
-    // Counted from when YouTube's player has loaded (slow on first visit), with a 25 s cap overall.
+    // Watchdog: if it still hasn't started, expose the player so a tap can start it.
     function armWatchdog(ms) { clearTimeout(timer); timer = setTimeout(onStuck, ms); }
     armWatchdog(25000);
     function onStuck() {
       if (played) return;
-      if (!muted) {
-        // Sound was blocked (visitor hasn't tapped the page yet): play it silently instead.
-        radio(false);
-        stopVideo && stopVideo();
-        const nb = buildVideo(d, true, inner);
-        box.replaceWith(nb.box);
-        stopVideo = nb.stop;
-        fitVideo();
-      } else {
-        shield.remove();   // last resort: expose the player so a tap can start it
-        f.style.pointerEvents = "auto";
-      }
+      shield.remove();
+      f.style.pointerEvents = "auto";
     }
 
     return {
       box,
-      stop() { clearTimeout(timer); hs.forEach(clearTimeout); window.removeEventListener("message", onMsg); },
+      stop() { clearTimeout(timer); clearTimeout(checkT); hs.forEach(clearTimeout); disarmGesture(); window.removeEventListener("message", onMsg); },
     };
   }
 

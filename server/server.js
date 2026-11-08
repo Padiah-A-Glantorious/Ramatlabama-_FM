@@ -247,13 +247,23 @@ function currentGenre() {
 function trackView(t) { return { id: t.id, title: t.title, genre: t.genre, size: t.size || 0, url: "/music/" + encodeURIComponent(t.file) }; }
 function linkView(l) { return { id: l.id, kind: l.kind, ytId: l.ytId, title: l.title, genre: l.genre }; }
 const sameGenre = (a, g) => !g || String(a).toLowerCase() === String(g).toLowerCase();
+// The genre that will actually play: the slot's genre, or, if it has no music yet,
+// the day's default genre, or else any music. Never silent while music exists.
+function playableGenre(c) {
+  const has = (g) => music.tracks.some((t) => sameGenre(t.genre, g)) || music.links.some((l) => sameGenre(l.genre, g));
+  const dayGenre = music.schedule[c.day] || "";
+  for (const g of [c.genre, dayGenre, ""]) if (has(g)) return { genre: g, fallback: g !== c.genre };
+  return { genre: c.genre, fallback: false };
+}
 function musicNow() {
   const c = currentGenre();
+  const p = playableGenre(c);
   return {
-    enabled: music.enabled, day: c.day, time: c.time, genre: c.genre || "All music",
-    slot: c.day + "|" + (c.slot ? c.slot.start + "-" + c.slot.end : "day") + "|" + c.genre,
-    tracks: music.enabled ? music.tracks.filter((t) => sameGenre(t.genre, c.genre)).map(trackView) : [],
-    links: music.enabled ? music.links.filter((l) => sameGenre(l.genre, c.genre)).map(linkView) : [],
+    enabled: music.enabled, day: c.day, time: c.time, genre: p.genre || "All music",
+    scheduled: c.genre || "All music", fallback: p.fallback,
+    slot: c.day + "|" + (c.slot ? c.slot.start + "-" + c.slot.end : "day") + "|" + p.genre,
+    tracks: music.enabled ? music.tracks.filter((t) => sameGenre(t.genre, p.genre)).map(trackView) : [],
+    links: music.enabled ? music.links.filter((l) => sameGenre(l.genre, p.genre)).map(linkView) : [],
   };
 }
 function musicAdminView() {
@@ -264,7 +274,7 @@ function musicAdminView() {
   const c = currentGenre();
   return {
     ok: true, enabled: music.enabled, schedule: music.schedule, slots: music.slots,
-    today: c.day, time: c.time, genreNow: c.genre,
+    today: c.day, time: c.time, genreNow: c.genre, playingNow: playableGenre(c).genre,
     genres: [...seen.values()], tracks: music.tracks.map(trackView), links: music.links.map(linkView),
     usedBytes: music.tracks.reduce((n, t) => n + (t.size || 0), 0), maxBytes: MUSIC_MAX_TOTAL,
     onAir, onAirKnown,

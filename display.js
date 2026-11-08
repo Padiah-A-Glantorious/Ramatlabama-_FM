@@ -163,6 +163,8 @@
 
   window.RFM_DISPLAY = {
     show(d) {
+      // Page-level flag: on phones the On Air card hides so the render takes its place.
+      document.body.classList.toggle("is-rendering", !!d);
       if (!d) {
         clearView();
         wrap.classList.remove("show-display");

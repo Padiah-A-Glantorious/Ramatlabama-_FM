@@ -1041,3 +1041,10 @@ body {
 /* Fill-in music playing: the hero button is just a label (can't pause) */
 .hero-player .btn-primary.is-locked { cursor: default; pointer-events: none; filter: saturate(0.85); }
 .hero-player .btn-primary.is-locked:hover { transform: none; }
+
+/* Phones/tablets (stacked layout): while something is rendered, hide On Air so the
+   rendered scripture/text/picture/video takes that screen space. Desktop unchanged. */
+@media (max-width: 860px) {
+  body.is-rendering .info-col { display: none; }
+  body.is-rendering .chat-wrap { min-height: 65vh; }
+}

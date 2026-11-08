@@ -951,12 +951,12 @@ body {
 .chat-wrap.show-display .composer { display: none; }
 .chat-wrap.show-display .display-view:not([hidden]) {
   display: flex; flex: 1 1 auto; min-height: 0; overflow-y: auto;
-  align-items: center; justify-content: center;
-  padding: clamp(10px, 2vh, 22px) clamp(8px, 2vw, 22px);
+  align-items: flex-start; justify-content: center;   /* text starts at the top, no empty space above */
+  padding: clamp(8px, 1.6vh, 18px) clamp(8px, 2vw, 22px);
   animation: displayIn .45s ease both;
 }
 @keyframes displayIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.display-inner { width: 100%; max-width: 680px; margin: auto; text-align: center; }
+.display-inner { width: 100%; max-width: 680px; margin: 0 auto; text-align: center; }
 .display-ref {
   font-size: clamp(16px, 2.1vw, 21px); font-weight: 800; letter-spacing: .3px;
   color: var(--accent, #e0b64b); margin-bottom: clamp(10px, 2vh, 20px);
@@ -1046,5 +1046,20 @@ body {
    rendered scripture/text/picture/video takes that screen space. Desktop unchanged. */
 @media (max-width: 860px) {
   body.is-rendering .info-col { display: none; }
-  body.is-rendering .chat-wrap { min-height: 65vh; }
+  /* The render box is only as tall as what's in it (no empty space, no scrolling). */
+  body.is-rendering .chat-wrap { min-height: 0; height: auto; }
+  body.is-rendering .chat-wrap .display-view { overflow: visible; }
 }
+
+/* While something is rendered the whole chat header goes (title + Call the studio).
+   Exception: a listener already on a call keeps the Hang up button. */
+.chat-wrap.show-display .chat-header:not(:has(.calling)) { display: none; }
+
+/* Rendered video fills the render box edge to edge in its true 16:9 shape:
+   no padding, no black bars, no crop or zoom. The box shrinks to the video. */
+.chat-wrap.show-display.has-video { padding: 0; overflow: hidden; }
+@media (min-width: 861px) { .chat-wrap.show-display.has-video { align-self: start; } }   /* desktop grid: box height = video */
+.chat-wrap.show-display.has-video .display-view:not([hidden]) { display: block; flex: 0 0 auto; padding: 0; overflow: hidden; }
+.chat-wrap.show-display.has-video .display-inner { display: block; height: auto; flex: none; margin: 0; }
+.chat-wrap.show-display.has-video .display-video { border-radius: 0; box-shadow: none; margin: 0 auto; }
+.chat-wrap.show-display.has-video .display-trans { margin: 0; padding: 8px 12px 10px; }

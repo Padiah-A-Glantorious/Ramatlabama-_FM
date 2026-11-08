@@ -171,7 +171,7 @@
             <p class="edit-hint">Paste a YouTube link. Works with youtube.com/watch, youtu.be, Shorts and live links.</p>
             <input type="text" class="render-full" id="ytUrl" placeholder="https://www.youtube.com/watch?v=…" maxlength="300" />
             <input type="text" class="render-full" id="ytCaption" placeholder="Caption (optional)" maxlength="140" />
-            <label class="render-check"><input type="checkbox" id="ytMuted" checked /> Play without sound (recommended: starts on every phone and doesn't clash with the radio)</label>
+            <label class="render-check"><input type="checkbox" id="ytMuted" /> Play without sound (leave unticked: the video plays with sound and the radio goes quiet until it ends)</label>
             <div class="render-preview" id="ytPreview"><p class="edit-empty">Paste a link to preview it.</p></div>
             <div class="save-row">
               <button type="button" class="btn-primary" id="ytRenderBtn" disabled>▶ Render video</button>
@@ -341,7 +341,7 @@
 
   <script src="config.js?v=22"></script>
   <script src="studio.js?v=4"></script>
-  <script src="render.js?v=2"></script>
+  <script src="render.js?v=4"></script>
   <script src="music.js?v=3"></script>
   <script src="presenter.js?v=21"></script>
 </body>

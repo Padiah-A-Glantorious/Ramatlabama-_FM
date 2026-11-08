@@ -71,6 +71,44 @@
   let ytDownUntil = 0;      // YouTube couldn't load: skip YouTube links until this time
   let ytVid = null, ytSongs = 0;   // songs played in the current playlist turn
   const SONGS_PER_TURN = 3;        // then rotate to another playlist / song in the same genre
+  let curId = null;                // id of the uploaded song now playing
+
+  /* ---- Radio goes quiet while a rendered video plays its sound (display.js calls this) ---- */
+  let ducked = false;
+  function applyDuck() {
+    player.muted = ducked;
+    if (yt) { try { if (ducked) yt.mute(); else yt.unMute(); } catch (_) {} }
+  }
+  window.RFM_RADIO = { duck(on) { if (ducked === !!on) return; ducked = !!on; applyDuck(); } };
+
+  /* ---- Refresh carries on the same song where it was (saved every 3 s for this tab) ---- */
+  const RESUME_KEY = "rfm_resume";
+  let resumeTried = false;
+  function saveResume() {
+    try {
+      if (!intent || onAir === true) { sessionStorage.removeItem(RESUME_KEY); return; }
+      let s = null;
+      if (mode === "music" && curId && player.currentTime > 0) s = { kind: "file", id: curId, t: player.currentTime };
+      else if (mode === "yt" && ytItem && yt && yt.getCurrentTime) {
+        s = { kind: "yt", id: ytItem.id, idx: ytItem.kind === "playlist" ? (yt.getPlaylistIndex() || 0) : 0, t: yt.getCurrentTime() || 0 };
+      }
+      if (s) { s.at = Date.now(); sessionStorage.setItem(RESUME_KEY, JSON.stringify(s)); }
+    } catch (_) {}
+  }
+  setInterval(saveResume, 3000);
+  window.addEventListener("pagehide", saveResume);
+  function takeResume() {      // the song this tab was playing before the refresh, if still valid
+    if (resumeTried || (!musicCache.tracks.length && !musicCache.links.length)) return null;
+    resumeTried = true;
+    try {
+      const s = JSON.parse(sessionStorage.getItem(RESUME_KEY) || "null");
+      if (!s || Date.now() - s.at > 15 * 60000) return null;
+      const list = s.kind === "file" ? musicCache.tracks : (ytBlocked ? [] : musicCache.links);
+      const item = list.find((x) => x.id === s.id);   // gone, or not in this time slot any more
+      if (!item) return null;
+      return { item: { ...item, type: s.kind }, t: s.t + (Date.now() - s.at) / 1000, idx: s.idx || 0 };
+    } catch (_) { return null; }
+  }
   function loadYtApi() {
     if (ytApi) return ytApi;
     ytApi = new Promise((resolve, reject) => {
@@ -97,13 +135,14 @@
     nowTitle = t;
     setStatus("♪ " + t);
   }
-  function playYt(item) {
+  function playYt(item, resume) {
     clearTimeout(retryTimer);
     mode = "yt";                                     // set first: the <audio> pause below is then ignored
     try { player.pause(); } catch (_) {}
     if (player.getAttribute("src")) { player.removeAttribute("src"); try { player.load(); } catch (_) {} }
     stopYt();
-    mode = "yt"; ytItem = item; ytShuffled = false; ytVid = null; ytSongs = 0;
+    mode = "yt"; ytItem = item; ytShuffled = !!resume; ytVid = null; ytSongs = 0;   // resuming: no random jump
+    let seekTo = resume && resume.t > 1 ? resume.t : 0;
     showYtTitle(item.title);
     setButton(); setPill();
     loadYtApi().then(() => {
@@ -114,6 +153,7 @@
         events: {
           onReady: (e) => {
             try { e.target.setVolume(Math.round(player.volume * 100)); } catch (_) {}
+            if (ducked) { try { e.target.mute(); } catch (_) {} }
             try { e.target.playVideo(); } catch (_) {}
             // Phones may refuse to start without a tap: say so instead of sitting silent.
             ytTimer = setTimeout(() => { if (mode === "yt" && ytItem === item && !ytPlaying()) armFirstInteractionAutoplay(); }, 5000);
@@ -123,6 +163,10 @@
             const S = window.YT.PlayerState;
             if (e.data === S.PLAYING) {
               musicErrors = 0; intent = true;
+              if (seekTo) {   // after a refresh: jump back to where the song was
+                const at = seekTo; seekTo = 0;
+                try { if (Math.abs((e.target.getCurrentTime() || 0) - at) > 4) e.target.seekTo(at, true); } catch (_) {}
+              }
               if (item.kind === "playlist" && !ytShuffled) {      // start the playlist at a random song
                 ytShuffled = true;
                 try {
@@ -160,8 +204,9 @@
           },
         },
       };
-      if (item.kind === "playlist") { vars.listType = "playlist"; vars.list = item.ytId; }
+      if (item.kind === "playlist") { vars.listType = "playlist"; vars.list = item.ytId; if (resume) vars.index = resume.idx; }
       else opts.videoId = item.ytId;
+      if (seekTo) vars.start = Math.floor(seekTo);
       yt = new window.YT.Player("ytMusicPlayer", opts);
     }).catch(() => {
       if (mode !== "yt" || ytItem !== item) return;
@@ -241,13 +286,23 @@
   }
   function nextFill() {      // play the next fill-in item; false when there's nothing to play
     clearTimeout(retryTimer);
-    const it = pickItem();
+    const r = onAir === false ? takeResume() : null;   // first song after a refresh: carry on
+    const it = r ? r.item : pickItem();
     refreshMusic();          // keep the list fresh (new slot, new uploads/links)
     if (!it) { if (mode === "yt") stopYt(); return false; }
-    if (it.type === "yt") { playYt(it); return true; }
+    if (r) recent.push(it.id);
+    if (it.type === "yt") { curId = null; playYt(it, r); return true; }
     if (mode === "yt") stopYt();
-    mode = "music"; switching = true; nowTitle = it.title;
+    mode = "music"; switching = true; nowTitle = it.title; curId = it.id;
     player.src = it.url;
+    if (r && r.t > 1) {
+      const at = r.t;
+      player.addEventListener("loadedmetadata", () => {
+        if (!isFinite(player.duration)) return;
+        if (at < player.duration - 2) { try { player.currentTime = at; } catch (_) {} }
+        else setTimeout(() => { if (intent && mode === "music" && !nextFill()) offAirIdle(); }, 0);   // that song had finished
+      }, { once: true });
+    }
     player.play().catch(onPlayReject);
     return true;
   }

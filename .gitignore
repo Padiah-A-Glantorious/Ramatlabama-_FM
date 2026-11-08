@@ -11,6 +11,8 @@ server/adverts.json
 server/promos.json
 server/adverts/
 server/promos/
+# login sessions (secret tokens)
+server/sessions.json
 # fill-in music library (songs are uploaded on the live server, not committed)
 server/music.json
 server/music/

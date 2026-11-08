@@ -58,8 +58,10 @@
       let state = null;
       if (data.event === "onStateChange" && typeof data.info === "number") state = data.info;
       else if (data.event === "infoDelivery" && data.info && typeof data.info.playerState === "number") state = data.info.playerState;
-      if (state === 1) { played = true; ended.hidden = true; }
-      if (state === 0) { ended.hidden = false; }
+      // A video with sound quiets the radio while it plays; the radio returns when it ends.
+      if (data.event === "onReady" || data.event === "initialDelivery") armWatchdog(4500);   // player loaded: now give it time to start
+      if (state === 1) { played = true; ended.hidden = true; if (!muted) radio(true); }
+      if (state === 0) { ended.hidden = false; radio(false); }
     };
     window.addEventListener("message", onMsg);
 
@@ -68,9 +70,14 @@
     f.addEventListener("load", () => { hello(); hs.push(setTimeout(hello, 600), setTimeout(hello, 1800)); });
 
     // Watchdog: if the browser blocked autoplay, retry muted; if still stuck, let the viewer tap play.
-    timer = setTimeout(() => {
+    // Counted from when YouTube's player has loaded (slow on first visit), with a 25 s cap overall.
+    function armWatchdog(ms) { clearTimeout(timer); timer = setTimeout(onStuck, ms); }
+    armWatchdog(25000);
+    function onStuck() {
       if (played) return;
       if (!muted) {
+        // Sound was blocked (visitor hasn't tapped the page yet): play it silently instead.
+        radio(false);
         stopVideo && stopVideo();
         const nb = buildVideo(d, true, inner);
         box.replaceWith(nb.box);
@@ -80,7 +87,7 @@
         shield.remove();   // last resort: expose the player so a tap can start it
         f.style.pointerEvents = "auto";
       }
-    }, 4500);
+    }
 
     return {
       box,
@@ -88,19 +95,26 @@
     };
   }
 
-  /* Size the video to the biggest 16:9 that fits the panel, so it never scrolls. */
+  /* The video fills the render box edge to edge in its true 16:9 shape (YouTube's own
+     shape), so nothing is cropped, zoomed or stretched. The box shrinks to fit it. */
   function fitVideo() {
     const box = view.querySelector(".display-video");
     if (!box) return;
-    const inner = box.parentElement;
-    const cap = inner.querySelector(".display-trans");
-    const reserve = cap ? cap.offsetHeight + 8 : 0;
-    const w = inner.clientWidth, h = inner.clientHeight - reserve;
-    if (w <= 0 || h <= 0) return;
-    const bw = Math.floor(Math.min(w, h * 16 / 9));
+    const cap = box.parentElement.querySelector(".display-trans");
+    const reserve = cap ? cap.offsetHeight : 0;
+    const w = view.clientWidth;
+    if (w <= 0) return;
+    let bw = w;
+    // Desktop: never taller than the space the chat panel normally has.
+    if (!window.matchMedia("(max-width: 860px)").matches) {
+      const grid = wrap.parentElement;
+      const maxH = (grid ? grid.clientHeight : window.innerHeight) - reserve;
+      if (maxH > 0) bw = Math.min(w, Math.floor(maxH * 16 / 9));
+    }
     box.style.width = bw + "px";
-    box.style.height = Math.floor(bw * 9 / 16) + "px";
+    box.style.height = Math.round(bw * 9 / 16) + "px";
   }
+  const radio = (on) => { try { if (window.RFM_RADIO) window.RFM_RADIO.duck(on); } catch (_) {} };
   let fitObserver = null;
   function watchFit() {
     unwatchFit();
@@ -117,6 +131,8 @@
   function clearView() {
     if (stopVideo) { stopVideo(); stopVideo = null; }
     unwatchFit();
+    radio(false);   // the radio comes back as soon as the video goes
+    wrap.classList.remove("has-video");
     view.querySelectorAll("iframe").forEach((f) => { try { f.src = "about:blank"; } catch (_) {} f.remove(); });
     view.innerHTML = "";
     view.classList.remove("is-video");
@@ -125,6 +141,7 @@
   function render(d) {
     clearView();
     view.classList.toggle("is-video", d.kind === "video");
+    wrap.classList.toggle("has-video", d.kind === "video");
     const inner = el("div", "display-inner display-k-" + d.kind + (d.kind === "video" && d.caption ? " has-cap" : ""));
 
     if (d.kind === "scripture") {
@@ -161,8 +178,26 @@
     }
   }
 
+  // Re-check with the server: phones that slept (or whose socket died quietly) may
+  // have missed a Render or Stop. Only redraw when something actually changed.
+  let currentTs = null;
+  function sync() {
+    fetch("/api/display", { cache: "no-store" }).then((r) => r.json()).then((j) => {
+      if (!j || !j.ok) return;
+      const ts = j.display ? j.display.ts : null;
+      if (ts !== currentTs) window.RFM_DISPLAY.show(j.display || null);
+    }).catch(() => {});
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) sync(); });
+  window.addEventListener("pageshow", sync);
+  window.addEventListener("online", sync);
+  setInterval(() => { if (!document.hidden) sync(); }, 20000);
+
   window.RFM_DISPLAY = {
     show(d) {
+      const ts = d ? (d.ts || 0) : null;
+      if (d && ts && ts === currentTs) return;   // same render again (e.g. on reconnect): don't restart it
+      currentTs = ts;
       // Page-level flag: on phones the On Air card hides so the render takes its place.
       document.body.classList.toggle("is-rendering", !!d);
       if (!d) {

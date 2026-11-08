@@ -348,6 +348,20 @@ async function pollOnAir() {
   } catch (_) { /* network hiccup: keep the last known state */ }
 }
 
+// Render / Stop, shared by the WebSocket and the HTTP API. Returns { ok, error }.
+function applyDisplay(u, action, display) {
+  if (!u) return { ok: false, error: "Not logged in. Log in again." };
+  if (!canRender(u)) return { ok: false, error: "You don't have permission to render. Ask the God Admin." };
+  if (action === "clear") liveDisplay = null;
+  else {
+    const clean = cleanDisplay(display);
+    if (!clean) return { ok: false, error: "That couldn't be displayed." };
+    liveDisplay = { ...clean, ts: Date.now(), by: sanitize(u.name, 40) };
+  }
+  broadcast({ type: "display", display: liveDisplay });
+  return { ok: true };
+}
+
 /* ================= CALL-IN ICE SERVERS ================= */
 // STUN alone fails for many callers on mobile data. Add a TURN relay by setting
 // the ICE_SERVERS env var on Render to a JSON array, e.g.
@@ -414,17 +428,37 @@ function canActOn(actor, target) {
   return actor.role === "god" || actor.role === "elevated";
 }
 
-// In-memory session tokens -> user id
+// Session tokens -> { id, ts }. Saved to the data disk so a deploy/restart doesn't
+// silently log out presenters mid-show. Tokens expire after 30 days.
+const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const sessions = new Map();
+(() => {
+  const saved = loadJson(SESSIONS_FILE, { tokens: {} });
+  const now = Date.now();
+  Object.entries((saved && saved.tokens) || {}).forEach(([t, s]) => {
+    if (s && s.id && now - (s.ts || 0) < SESSION_TTL_MS) sessions.set(t, { id: s.id, ts: s.ts });
+  });
+})();
+let sessionsSaveTimer = null;
+function saveSessionsSoon() {
+  if (sessionsSaveTimer) return;
+  sessionsSaveTimer = setTimeout(() => {
+    sessionsSaveTimer = null;
+    try { saveJson(SESSIONS_FILE, { tokens: Object.fromEntries(sessions) }); } catch (_) {}
+  }, 1000);
+}
 function newToken(userId) {
   const t = crypto.randomBytes(24).toString("hex");
-  sessions.set(t, userId);
+  sessions.set(t, { id: userId, ts: Date.now() });
+  saveSessionsSoon();
   return t;
 }
 function userFromToken(token) {
-  const id = sessions.get(token);
-  if (!id) return null;
-  return db.users.find((u) => u.id === id) || null;
+  const s = sessions.get(token);
+  if (!s) return null;
+  if (Date.now() - s.ts > SESSION_TTL_MS) { sessions.delete(token); saveSessionsSoon(); return null; }
+  return db.users.find((u) => u.id === s.id) || null;
 }
 function publicUser(u) {   // for the logged-in user's own identity
   return { id: u.id, login: u.login, email: u.email, name: u.name, title: u.title, role: u.role, canRender: canRender(u) };
@@ -515,6 +549,18 @@ const httpServer = http.createServer(async (req, res) => {
     });
   }
 
+  /* ---- public: what is rendered right now (listeners re-check this when they wake) ---- */
+  if (p === "/api/display" && req.method === "GET") {
+    return sendJson(res, 200, { ok: true, display: liveDisplay });
+  }
+  /* ---- staff: Render / Stop over plain HTTP (works even if the live socket dropped) ---- */
+  if (p === "/api/display" && req.method === "POST") {
+    const body = await readBodyLarge(req, 4 * 1024 * 1024);
+    if (body === null) return sendJson(res, 400, { ok: false, error: "Too large." });
+    const r = applyDisplay(authUser(body), body.action === "clear" ? "clear" : "set", body.display);
+    return sendJson(res, r.ok ? 200 : 403, { ...r, display: liveDisplay });
+  }
+
   /* ---- public: ICE servers for call-in (STUN + optional TURN from env) ---- */
   if (p === "/api/ice" && req.method === "GET") {
     return sendJson(res, 200, { iceServers: ICE_SERVERS });
@@ -531,7 +577,16 @@ const httpServer = http.createServer(async (req, res) => {
     if (!ref) return sendJson(res, 400, { ok: false, error: "Type a passage, e.g. John 3:16-17." });
     try {
       const r = await fetch("https://bible-api.com/" + encodeURIComponent(ref) + "?translation=" + tr, { signal: AbortSignal.timeout(8000) });
-      if (!r.ok) return sendJson(res, 404, { ok: false, error: "Passage not found. Check the spelling, e.g. Psalm 23 or John 3:16-17." });
+      if (!r.ok) {
+        // Some translations (e.g. Open English) are unfinished. If KJV has it, say so.
+        if (tr !== "kjv") {
+          try {
+            const k = await fetch("https://bible-api.com/" + encodeURIComponent(ref) + "?translation=kjv", { signal: AbortSignal.timeout(8000) });
+            if (k.ok) return sendJson(res, 404, { ok: false, error: BIBLE_TRANSLATIONS[tr] + " doesn't include " + ref + ". Choose KJV or WEB instead." });
+          } catch (_) {}
+        }
+        return sendJson(res, 404, { ok: false, error: "Passage not found. Check the spelling, e.g. Psalm 23 or John 3:16-17." });
+      }
       const j = await r.json();
       const verses = (Array.isArray(j.verses) ? j.verses : []).slice(0, MAX_DISPLAY_VERSES).map((v) => ({
         n: Number(v.verse) || 0, text: sanitize(String(v.text || "").replace(/\s+/g, " ").trim(), 1000),
@@ -931,6 +986,14 @@ const httpServer = http.createServer(async (req, res) => {
 
 /* ================= WebSocket chat ================= */
 const wss = new WebSocketServer({ server: httpServer });
+// Ping every 30s; a socket that didn't answer the last ping is dead -> close it.
+setInterval(() => {
+  for (const c of wss.clients) {
+    if (c.isAlive === false) { try { c.terminate(); } catch (_) {} continue; }
+    c.isAlive = false;
+    try { c.ping(); } catch (_) {}
+  }
+}, 30000);
 function broadcast(obj) {
   const payload = JSON.stringify(obj);
   for (const c of wss.clients) if (c.readyState === 1) c.send(payload);
@@ -964,8 +1027,13 @@ wss.on("connection", (ws) => {
   broadcast({ type: "presence", count: wss.clients.size });
   // Tell the newcomer whether a presenter is live (drives the fill-in music).
   sendTo(ws, { type: "onair", live: onAir });
-  // If something is being rendered right now, show it to the newcomer too.
-  if (liveDisplay) sendTo(ws, { type: "display", display: liveDisplay });
+  // Always tell a (re)connecting page what to show, including "nothing": a phone that
+  // slept through Stop must bring the chat back when it reconnects.
+  sendTo(ws, { type: "display", display: liveDisplay });
+  // Heartbeat: Render/Cloudflare drop idle sockets silently; pings keep them alive
+  // and let us close dead ones so the page reconnects.
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
   // Send the recent conversation so the newcomer sees what came before.
   pruneChat();
   ws.send(JSON.stringify({ type: "history", messages: chatLog.messages }));
@@ -986,15 +1054,8 @@ wss.on("connection", (ws) => {
     /* ---- live display: render scripture/text/image over the listeners' chat ---- */
     if (d.type === "display-set" || d.type === "display-clear") {
       const u = d.token ? userFromToken(String(d.token)) : null;
-      if (!u) return;   // logged-in staff only
-      if (!canRender(u)) { sendTo(ws, { type: "display-error", error: "You don't have permission to render. Ask the God Admin." }); return; }
-      if (d.type === "display-clear") { liveDisplay = null; }
-      else {
-        const clean = cleanDisplay(d.display);
-        if (!clean) { sendTo(ws, { type: "display-error", error: "That couldn't be displayed." }); return; }
-        liveDisplay = { ...clean, ts: Date.now(), by: sanitize(u.name, 40) };
-      }
-      broadcast({ type: "display", display: liveDisplay });
+      const r = applyDisplay(u, d.type === "display-clear" ? "clear" : "set", d.display);
+      if (!r.ok && u) sendTo(ws, { type: "display-error", error: r.error });
       return;
     }
 

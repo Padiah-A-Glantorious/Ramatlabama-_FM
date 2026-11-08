@@ -12,7 +12,27 @@
   let passage = null;       // last scripture lookup { reference, translation, verses }
   let imageData = null;     // resized data URL of the chosen picture
 
-  function send(obj) { if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ ...obj, token })); return true; } return false; }
+  // Render / Stop go over plain HTTP: they work even if the live socket dropped,
+  // and every failure (e.g. logged out after a restart) is shown on screen.
+  async function apply(action, display, stateId) {
+    const btns = document.querySelectorAll("#tab-render button");
+    btns.forEach((b) => b.dataset.busy = "1");
+    say(stateId, action === "clear" ? "Stopping…" : "Sending…");
+    try {
+      const r = await fetch("/api/display", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action, display }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) { say(stateId, j.error || "Failed. Try again.", false); return false; }
+      showStatus(j.display || null);
+      say(stateId, action === "clear" ? "Stopped. Listeners see the chat again." : "Rendered.");
+      return true;
+    } catch (_) {
+      say(stateId, "Can't reach the server. Check your connection and try again.", false);
+      return false;
+    } finally { btns.forEach((b) => delete b.dataset.busy); }
+  }
   function say(id, text, ok) {
     const s = byId(id); if (!s) return;
     s.textContent = text || ""; s.style.color = ok === false ? "#ff6b5e" : "";
@@ -45,19 +65,29 @@
     const ref = byId("bibleRef").value.trim();
     if (!ref) { say("bibleState", "Type a passage first.", false); return; }
     say("bibleState", "Looking up…");
+    // Forget the previous passage so a failed lookup can never render the old one.
+    passage = null;
     byId("bibleRenderBtn").disabled = true;
+    byId("biblePreview").innerHTML = '<p class="edit-empty">Looking up…</p>';
     try {
       const r = await fetch("/api/bible", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, ref, translation: byId("bibleTrans").value }),
       });
       const j = await r.json();
-      if (!r.ok || !j.ok) { say("bibleState", j.error || "Not found.", false); return; }
+      if (!r.ok || !j.ok) {
+        byId("biblePreview").innerHTML = '<p class="edit-empty">Nothing to preview.</p>';
+        say("bibleState", j.error || "Not found.", false);
+        return;
+      }
       passage = { reference: j.reference, translation: j.translation, verses: j.verses };
       previewPassage(passage);
       byId("bibleRenderBtn").disabled = false;
       say("bibleState", "");
-    } catch (_) { say("bibleState", "Can't reach the server.", false); }
+    } catch (_) {
+      byId("biblePreview").innerHTML = '<p class="edit-empty">Nothing to preview.</p>';
+      say("bibleState", "Can't reach the server.", false);
+    }
   }
 
   /* ---------- picture: shrink before sending ---------- */
@@ -123,15 +153,13 @@
 
     byId("bibleRenderBtn").onclick = () => {
       if (!passage) return;
-      if (send({ type: "display-set", display: { kind: "scripture", ...passage } })) say("bibleState", "Rendered.");
-      else say("bibleState", "Not connected. Try again in a moment.", false);
+      apply("set", { kind: "scripture", ...passage }, "bibleState");
     };
 
     byId("textRenderBtn").onclick = () => {
       const body = byId("textBody").value;
       if (!body.trim()) { say("textState", "Type some text first.", false); return; }
-      if (send({ type: "display-set", display: { kind: "text", title: byId("textTitle").value.trim(), body } })) say("textState", "Rendered.");
-      else say("textState", "Not connected. Try again in a moment.", false);
+      apply("set", { kind: "text", title: byId("textTitle").value.trim(), body }, "textState");
     };
 
     byId("imgFile").onchange = async (e) => {
@@ -149,8 +177,7 @@
 
     byId("imgRenderBtn").onclick = () => {
       if (!imageData) return;
-      if (send({ type: "display-set", display: { kind: "image", image: imageData, caption: byId("imgCaption").value.trim() } })) say("imgState", "Rendered.");
-      else say("imgState", "Not connected. Try again in a moment.", false);
+      apply("set", { kind: "image", image: imageData, caption: byId("imgCaption").value.trim() }, "imgState");
     };
 
     // YouTube: validate as you type and show a preview.
@@ -174,14 +201,13 @@
     byId("ytUrl").addEventListener("input", ytUpdate);
     byId("ytRenderBtn").onclick = () => {
       if (!yt) return;
-      const ok = send({ type: "display-set", display: {
+      apply("set", {
         kind: "video", videoId: yt.videoId, start: yt.start,
         muted: byId("ytMuted").checked, caption: byId("ytCaption").value.trim(),
-      } });
-      say("ytState", ok ? "Rendered." : "Not connected. Try again in a moment.", ok ? undefined : false);
+      }, "ytState");
     };
 
-    byId("renderStopBtn").onclick = () => { send({ type: "display-clear" }); };
+    byId("renderStopBtn").onclick = () => { apply("clear", null, "renderStatus"); };
   }
 
   let wired = false;
@@ -190,6 +216,8 @@
       token = tk;
       if (!wired) { wire(); wired = true; }
       if (!ws) connect();
+      // Show the real current state straight away (don't wait for the socket).
+      fetch("/api/display", { cache: "no-store" }).then((r) => r.json()).then((j) => { if (j && j.ok) showStatus(j.display || null); }).catch(() => {});
     },
   };
 })();

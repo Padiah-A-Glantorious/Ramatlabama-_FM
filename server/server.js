@@ -149,6 +149,205 @@ const DEFAULT_USERS = {
 let db = loadJson(USERS_FILE, DEFAULT_USERS);
 if (!Array.isArray(db.users)) db = JSON.parse(JSON.stringify(DEFAULT_USERS));
 
+/* ================= LIVE DISPLAY (scripture / text / image) ================= */
+// What presenters "render" over the listeners' chat panel. Held in memory only.
+const BIBLE_TRANSLATIONS = {
+  kjv: "King James Version", web: "World English Bible", webbe: "World English Bible (British)",
+  bbe: "Bible in Basic English", "oeb-us": "Open English Bible (US)",
+};
+const MAX_DISPLAY_VERSES = 60;
+const MAX_IMAGE_CHARS = 2.5 * 1024 * 1024;
+let liveDisplay = null;
+function cleanDisplay(d) {
+  if (!d || typeof d !== "object") return null;
+  if (d.kind === "scripture") {
+    const verses = (Array.isArray(d.verses) ? d.verses : []).slice(0, MAX_DISPLAY_VERSES)
+      .map((v) => ({ n: Number(v && v.n) || 0, text: sanitize(v && v.text, 1000) })).filter((v) => v.text);
+    if (!verses.length) return null;
+    return { kind: "scripture", reference: sanitize(d.reference, 100), translation: sanitize(d.translation, 60), verses };
+  }
+  if (d.kind === "text") {
+    const body = String(d.body == null ? "" : d.body).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").slice(0, 3000);
+    if (!body.trim()) return null;
+    return { kind: "text", title: sanitize(d.title, 100), body };
+  }
+  if (d.kind === "video") {
+    const id = String(d.videoId || "");
+    if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;          // a YouTube video id is exactly 11 chars
+    const start = Math.max(0, Math.min(86400, parseInt(d.start, 10) || 0));
+    return { kind: "video", videoId: id, start, muted: d.muted !== false, caption: sanitize(d.caption, 140) };
+  }
+  if (d.kind === "image") {
+    const url = String(d.image || "");
+    if (!/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(url) || url.length > MAX_IMAGE_CHARS) return null;
+    return { kind: "image", image: url, caption: sanitize(d.caption, 140) };
+  }
+  return null;
+}
+
+/* ================= FILL-IN MUSIC (plays on the site while nobody is live) ================= */
+// The God Admin uploads songs tagged with a genre and picks a genre per weekday
+// (Sunday defaults to Gospel). Listeners' players play these while the Famcast
+// stream is off air, and switch to the live show as soon as a presenter goes live.
+const MUSIC_FILE = path.join(DATA_DIR, "music.json");
+const MUSIC_DIR = path.join(DATA_DIR, "music");
+try { fs.mkdirSync(MUSIC_DIR, { recursive: true }); } catch (_) {}
+const MUSIC_MAX_BYTES = 15 * 1024 * 1024;                                   // per song
+const MUSIC_MAX_TOTAL = (parseInt(process.env.MUSIC_MAX_MB, 10) || 700) * 1024 * 1024;   // whole library
+const MUSIC_MAX_TRACKS = 400;
+const WEEK_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const DEFAULT_GENRES = ["Gospel", "Afro-pop", "Amapiano", "House", "Jazz", "R&B", "Traditional", "Kwaito", "Hip-hop", "Reggae"];
+const AUDIO_MIME = { ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".ogg": "audio/ogg" };
+// Default time slots: Sunday morning Gospel, Jazz in the day, Gospel in the evening
+// up to the Spiritual Awakening show. Outside a slot the day's default genre applies.
+const DEFAULT_SLOTS = {
+  sun: [
+    { start: "05:00", end: "12:00", genre: "Gospel" },
+    { start: "12:00", end: "18:00", genre: "Jazz" },
+    { start: "18:00", end: "22:00", genre: "Gospel" },
+  ],
+};
+let music = loadJson(MUSIC_FILE, { enabled: true, tracks: [], links: [], schedule: { sun: "Gospel" }, slots: DEFAULT_SLOTS });
+if (!Array.isArray(music.tracks)) music.tracks = [];
+if (!Array.isArray(music.links)) music.links = [];
+if (!music.schedule || typeof music.schedule !== "object") music.schedule = { sun: "Gospel" };
+if (!music.slots || typeof music.slots !== "object") music.slots = JSON.parse(JSON.stringify(DEFAULT_SLOTS));
+if (typeof music.enabled !== "boolean") music.enabled = true;
+const MUSIC_MAX_LINKS = 200;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+// Self-heal: drop records whose audio file is missing.
+music.tracks = music.tracks.filter((t) => { try { return fs.existsSync(path.join(MUSIC_DIR, t.file)); } catch (_) { return false; } });
+function saveMusic() { try { saveJson(MUSIC_FILE, music); } catch (_) {} }
+function cleanGenre(g) { return sanitize(g, 30).trim(); }
+function stationDay() {   // weekday in South Africa, whatever timezone the server runs in
+  try {
+    const wd = new Intl.DateTimeFormat("en-US", { timeZone: "Africa/Johannesburg", weekday: "short" })
+      .format(new Date()).toLowerCase().slice(0, 3);
+    if (WEEK_DAYS.includes(wd)) return wd;
+  } catch (_) {}
+  return ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
+}
+function stationTime() {   // "HH:MM" in South Africa
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Johannesburg", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+    const h = (parts.find((p) => p.type === "hour") || {}).value, m = (parts.find((p) => p.type === "minute") || {}).value;
+    if (h && m) return h.padStart(2, "0") + ":" + m.padStart(2, "0");
+  } catch (_) {}
+  const d = new Date(); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+function inSlot(t, s) {   // end <= start means the slot runs past midnight (00:00 = until midnight)
+  return s.start < s.end ? t >= s.start && t < s.end : t >= s.start || t < s.end;
+}
+function currentGenre() {
+  const day = stationDay(), time = stationTime();
+  const slot = (music.slots[day] || []).find((s) => inSlot(time, s));
+  const genre = slot ? slot.genre : (music.schedule[day] || "");     // "" = any genre
+  return { day, time, genre, slot: slot || null };
+}
+function trackView(t) { return { id: t.id, title: t.title, genre: t.genre, size: t.size || 0, url: "/music/" + encodeURIComponent(t.file) }; }
+function linkView(l) { return { id: l.id, kind: l.kind, ytId: l.ytId, title: l.title, genre: l.genre }; }
+const sameGenre = (a, g) => !g || String(a).toLowerCase() === String(g).toLowerCase();
+function musicNow() {
+  const c = currentGenre();
+  return {
+    enabled: music.enabled, day: c.day, time: c.time, genre: c.genre || "All music",
+    slot: c.day + "|" + (c.slot ? c.slot.start + "-" + c.slot.end : "day") + "|" + c.genre,
+    tracks: music.enabled ? music.tracks.filter((t) => sameGenre(t.genre, c.genre)).map(trackView) : [],
+    links: music.enabled ? music.links.filter((l) => sameGenre(l.genre, c.genre)).map(linkView) : [],
+  };
+}
+function musicAdminView() {
+  const seen = new Map();
+  const slotGenres = Object.values(music.slots).flat().map((s) => s && s.genre);
+  [...DEFAULT_GENRES, ...music.tracks.map((t) => t.genre), ...music.links.map((l) => l.genre), ...Object.values(music.schedule), ...slotGenres]
+    .filter(Boolean).forEach((g) => { if (!seen.has(g.toLowerCase())) seen.set(g.toLowerCase(), g); });
+  const c = currentGenre();
+  return {
+    ok: true, enabled: music.enabled, schedule: music.schedule, slots: music.slots,
+    today: c.day, time: c.time, genreNow: c.genre,
+    genres: [...seen.values()], tracks: music.tracks.map(trackView), links: music.links.map(linkView),
+    usedBytes: music.tracks.reduce((n, t) => n + (t.size || 0), 0), maxBytes: MUSIC_MAX_TOTAL,
+    onAir, onAirKnown,
+  };
+}
+// Accept youtube.com/watch, youtu.be, shorts, live, embed and playlist links.
+// A link that carries list= is treated as the whole playlist.
+function parseYouTubeLink(raw) {
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw); } catch (_) { return null; }
+  const host = u.hostname.toLowerCase().replace(/^(www\.|m\.|music\.)/, "");
+  if (!["youtube.com", "youtu.be", "youtube-nocookie.com"].includes(host)) return null;
+  let id = null;
+  if (host === "youtu.be") id = u.pathname.slice(1).split("/")[0];
+  else if (u.pathname === "/watch") id = u.searchParams.get("v");
+  else { const m = u.pathname.match(/^\/(?:embed|shorts|live|v)\/([^/?#]+)/); if (m) id = m[1]; }
+  const video = id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+  const list = u.searchParams.get("list");
+  // YouTube Mixes (RD…) are made per viewer and can't be played as a playlist;
+  // WL / LL / LM are someone's private Watch later / Liked lists.
+  const special = list && (/^RD/.test(list) || /^(WL|LL|LM)$/.test(list));
+  if (list && !special && /^[A-Za-z0-9_-]{10,80}$/.test(list)) return { kind: "playlist", ytId: list, videoId: video };
+  if (video) return { kind: "video", ytId: video, fromMix: !!special };
+  if (special) return { kind: "mix" };
+  return null;
+}
+async function youTubeInfo(link) {   // title, and an early warning if it can't be played
+  const page = link.kind === "playlist" ? "https://www.youtube.com/playlist?list=" + link.ytId : "https://www.youtube.com/watch?v=" + link.ytId;
+  try {
+    const r = await fetch("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(page), { signal: AbortSignal.timeout(8000) });
+    if (r.status === 401 || r.status === 403) return { error: "The owner doesn't allow this to be played on other websites." };
+    if (r.status === 400 || r.status === 404) return { error: "YouTube can't find that. It may be private or deleted." };
+    if (!r.ok) return {};
+    const j = await r.json();
+    return { title: sanitize(j.title, 100) };
+  } catch (_) { return {}; }   // YouTube unreachable: accept it anyway
+}
+function cleanSlots(input) {
+  const out = {};
+  WEEK_DAYS.forEach((d) => {
+    const arr = Array.isArray(input && input[d]) ? input[d] : [];
+    const clean = arr.slice(0, 12).map((s) => ({
+      start: String(s && s.start || ""), end: String(s && s.end || ""), genre: cleanGenre(s && s.genre),
+    })).filter((s) => TIME_RE.test(s.start) && TIME_RE.test(s.end) && s.start !== s.end && s.genre);
+    if (clean.length) out[d] = clean.sort((a, b) => (a.start < b.start ? -1 : 1));
+  });
+  return out;
+}
+function sniffAudio(buf) {   // trust the bytes, not the file name
+  if (buf.length < 12) return null;
+  if (buf.slice(0, 3).toString("latin1") === "ID3") return ".mp3";
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return ".mp3";
+  if (buf.slice(4, 8).toString("latin1") === "ftyp") return ".m4a";
+  if (buf.slice(0, 4).toString("latin1") === "OggS") return ".ogg";
+  return null;
+}
+function readRaw(req, max) {   // raw request body as a Buffer, or null if too big
+  return new Promise((resolve) => {
+    const chunks = []; let n = 0, tooBig = false;
+    req.on("data", (c) => { n += c.length; if (n > max) tooBig = true; else chunks.push(c); });
+    req.on("end", () => resolve(tooBig ? null : Buffer.concat(chunks)));
+    req.on("error", () => resolve(null));
+  });
+}
+
+/* ---- Is a presenter live? Ask the Famcast (Icecast) server every 10 seconds ---- */
+const STREAM_STATUS_URL = process.env.STREAM_STATUS_URL || "https://sv2.famcast.co.za:8845/status-json.xsl";
+const STREAM_MOUNT = process.env.STREAM_MOUNT || "/stream";
+let onAir = false, onAirKnown = false;
+async function pollOnAir() {
+  try {
+    const r = await fetch(STREAM_STATUS_URL, { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "RamatlabamaFM-site" } });
+    const j = await r.json();
+    const src = j && j.icestats && j.icestats.source;
+    const list = Array.isArray(src) ? src : src ? [src] : [];
+    const live = list.some((s) => !s || !s.listenurl || String(s.listenurl).endsWith(STREAM_MOUNT));
+    if (live !== onAir || !onAirKnown) {
+      onAir = live; onAirKnown = true;
+      broadcast({ type: "onair", live: onAir });
+    }
+  } catch (_) { /* network hiccup: keep the last known state */ }
+}
+
 /* ================= CALL-IN ICE SERVERS ================= */
 // STUN alone fails for many callers on mobile data. Add a TURN relay by setting
 // the ICE_SERVERS env var on Render to a JSON array, e.g.
@@ -228,15 +427,17 @@ function userFromToken(token) {
   return db.users.find((u) => u.id === id) || null;
 }
 function publicUser(u) {   // for the logged-in user's own identity
-  return { id: u.id, login: u.login, email: u.email, name: u.name, title: u.title, role: u.role };
+  return { id: u.id, login: u.login, email: u.email, name: u.name, title: u.title, role: u.role, canRender: canRender(u) };
 }
 function memberView(u) {   // for the Members list — NO email shown
-  return { id: u.id, name: u.name, title: u.title, role: u.role };
+  return { id: u.id, name: u.name, title: u.title, role: u.role, canRender: canRender(u) };
 }
 function accessLabel(role) {
   return role === "god" ? "God Admin" : role === "elevated" ? "Elevated Access" : "Presenter";
 }
 function canManage(role) { return role === "god" || role === "elevated"; }
+// Rendering scripture/text/pictures to listeners: God Admin always, others only if God grants it.
+function canRender(u) { return !!u && (u.role === "god" || u.canRender === true); }
 
 /* ================= helpers ================= */
 function sanitize(s, max) { return String(s == null ? "" : s).replace(/[\u0000-\u001F\u007F]/g, "").slice(0, max); }
@@ -319,6 +520,29 @@ const httpServer = http.createServer(async (req, res) => {
     return sendJson(res, 200, { iceServers: ICE_SERVERS });
   }
 
+  /* ---- staff: look up a Bible passage (proxied to bible-api.com) ---- */
+  if (p === "/api/bible" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u) return sendJson(res, 401, { ok: false, error: "Not logged in." });
+    if (!canRender(u)) return sendJson(res, 403, { ok: false, error: "You don't have permission to render. Ask the God Admin." });
+    const ref = sanitize(body.ref, 80).trim();
+    const tr = BIBLE_TRANSLATIONS[String(body.translation)] ? String(body.translation) : "kjv";
+    if (!ref) return sendJson(res, 400, { ok: false, error: "Type a passage, e.g. John 3:16-17." });
+    try {
+      const r = await fetch("https://bible-api.com/" + encodeURIComponent(ref) + "?translation=" + tr, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return sendJson(res, 404, { ok: false, error: "Passage not found. Check the spelling, e.g. Psalm 23 or John 3:16-17." });
+      const j = await r.json();
+      const verses = (Array.isArray(j.verses) ? j.verses : []).slice(0, MAX_DISPLAY_VERSES).map((v) => ({
+        n: Number(v.verse) || 0, text: sanitize(String(v.text || "").replace(/\s+/g, " ").trim(), 1000),
+      }));
+      if (!verses.length) return sendJson(res, 404, { ok: false, error: "Passage not found." });
+      return sendJson(res, 200, { ok: true, reference: sanitize(j.reference, 100), translation: BIBLE_TRANSLATIONS[tr], verses });
+    } catch (_) {
+      return sendJson(res, 502, { ok: false, error: "Couldn't reach the Bible service. Try again, or use Custom text." });
+    }
+  }
+
   /* ---- public: list adverts for the listener site to rotate ---- */
   if (p === "/api/promos" && req.method === "GET") {
     return sendJson(res, 200, { adverts: adverts.items.map(advertView) });
@@ -366,6 +590,139 @@ const httpServer = http.createServer(async (req, res) => {
       saveAdverts();
     }
     return sendJson(res, 200, { ok: true, adverts: adverts.items.map(advertView) });
+  }
+
+  /* ---- public: is anyone live, and what fill-in music is playing today ---- */
+  if (p === "/api/music/now" && req.method === "GET") {
+    return sendJson(res, 200, { ok: true, live: onAir, known: onAirKnown, ...musicNow() });
+  }
+
+  /* ---- God Admin: fill-in music library, schedule and settings ---- */
+  if (p === "/api/music/admin" && req.method === "POST") {
+    const u = authUser(await readBody(req));
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    return sendJson(res, 200, musicAdminView());
+  }
+  if (p === "/api/music/settings" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    if (typeof body.enabled === "boolean") music.enabled = body.enabled;
+    if (body.schedule && typeof body.schedule === "object") {
+      const next = {};
+      WEEK_DAYS.forEach((d) => { const g = cleanGenre(body.schedule[d]); if (g) next[d] = g; });
+      music.schedule = next;
+    }
+    if (body.slots && typeof body.slots === "object") music.slots = cleanSlots(body.slots);
+    saveMusic();
+    broadcast({ type: "music-changed" });   // listeners re-check what should play
+    return sendJson(res, 200, musicAdminView());
+  }
+  if (p === "/api/music/link" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    if (music.links.length >= MUSIC_MAX_LINKS) return sendJson(res, 400, { ok: false, error: "Link limit reached. Delete some first." });
+    let link = parseYouTubeLink(sanitize(body.url, 400).trim());
+    if (!link) return sendJson(res, 400, { ok: false, error: "That isn't a YouTube video or playlist link." });
+    if (link.kind === "mix") return sendJson(res, 400, { ok: false, error: "That's a YouTube Mix or a private list (Liked / Watch later), which can't be shared. Open a normal playlist and copy its link, or save the songs into your own public playlist." });
+    const genre = cleanGenre(body.genre);
+    if (!genre) return sendJson(res, 400, { ok: false, error: "Choose a genre for the link." });
+    let info = await youTubeInfo(link);
+    let note = link.fromMix ? "That was a YouTube Mix, so only the song in the link was added. For many songs, use a normal playlist." : "";
+    // A private/unlisted playlist link that also names a song: fall back to that song.
+    if (info.error && link.kind === "playlist" && link.videoId) {
+      const asVideo = { kind: "video", ytId: link.videoId };
+      const vInfo = await youTubeInfo(asVideo);
+      if (!vInfo.error) { link = asVideo; info = vInfo; note = "That playlist is private, so only the song in the link was added. Make the playlist Public (or Unlisted) to add all of it."; }
+    }
+    if (info.error) {
+      const why = link.kind === "playlist"
+        ? "YouTube can't open that playlist. Make sure it's set to Public or Unlisted (not Private), then copy the link again."
+        : info.error;
+      return sendJson(res, 400, { ok: false, error: why });
+    }
+    if (music.links.some((l) => l.ytId === link.ytId && sameGenre(l.genre, genre)))
+      return sendJson(res, 400, { ok: false, error: "That link is already in " + genre + "." });
+    const title = sanitize(body.title, 100).trim() || info.title || (link.kind === "playlist" ? "YouTube playlist" : "YouTube video");
+    music.links.push({ id: "yt" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: link.kind, ytId: link.ytId, title, genre, ts: Date.now() });
+    saveMusic();
+    broadcast({ type: "music-changed" });
+    return sendJson(res, 200, { ...musicAdminView(), note });
+  }
+  if (p === "/api/music/link/delete" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    music.links = music.links.filter((l) => l.id !== String(body.id));
+    saveMusic();
+    return sendJson(res, 200, musicAdminView());
+  }
+  if (p === "/api/music/upload" && req.method === "POST") {
+    // Raw file body; token/genre/title travel in headers so nothing is read before auth.
+    const u = userFromToken(String(req.headers["x-token"] || ""));
+    if (!u || u.role !== "god") { req.resume(); return sendJson(res, 403, { ok: false, error: "Only the God Admin can upload music." }); }
+    if (music.tracks.length >= MUSIC_MAX_TRACKS) { req.resume(); return sendJson(res, 400, { ok: false, error: "Song limit reached. Delete some first." }); }
+    let genre = "", title = "";
+    try { genre = cleanGenre(decodeURIComponent(String(req.headers["x-genre"] || ""))); } catch (_) {}
+    try { title = sanitize(decodeURIComponent(String(req.headers["x-title"] || "")), 80).trim(); } catch (_) {}
+    if (!genre) { req.resume(); return sendJson(res, 400, { ok: false, error: "Choose a genre for the song." }); }
+    const buf = await readRaw(req, MUSIC_MAX_BYTES);
+    if (!buf) return sendJson(res, 413, { ok: false, error: "Song is too big (max 15 MB)." });
+    const used = music.tracks.reduce((n, t) => n + (t.size || 0), 0);
+    if (used + buf.length > MUSIC_MAX_TOTAL) return sendJson(res, 400, { ok: false, error: "Music storage is full. Delete some songs first." });
+    const ext = sniffAudio(buf);
+    if (!ext) return sendJson(res, 400, { ok: false, error: "Use MP3, M4A or OGG audio files." });
+    const id = "mu" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const file = id + ext;
+    try { fs.writeFileSync(path.join(MUSIC_DIR, file), buf); }
+    catch (_) { return sendJson(res, 500, { ok: false, error: "Could not save the song." }); }
+    music.tracks.push({ id, file, title: title || "Untitled", genre, size: buf.length, ts: Date.now() });
+    saveMusic();
+    return sendJson(res, 200, musicAdminView());
+  }
+  if (p === "/api/music/delete" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    const t = music.tracks.find((x) => x.id === String(body.id));
+    if (t) {
+      try { fs.unlinkSync(path.join(MUSIC_DIR, t.file)); } catch (_) {}
+      music.tracks = music.tracks.filter((x) => x.id !== t.id);
+      saveMusic();
+    }
+    return sendJson(res, 200, musicAdminView());
+  }
+
+  /* ---- serve a song (with Range support: phones need it to play and seek audio) ---- */
+  if (p.startsWith("/music/") && (req.method === "GET" || req.method === "HEAD")) {
+    let name = "";
+    try { name = path.basename(decodeURIComponent(p.slice("/music/".length))); } catch (_) {}
+    const fp = path.join(MUSIC_DIR, name);
+    if (!name || !fp.startsWith(MUSIC_DIR + path.sep)) { res.writeHead(403); return res.end("Forbidden"); }
+    return fs.stat(fp, (err, st) => {
+      if (err || !st.isFile()) { res.writeHead(404); return res.end("Not found"); }
+      const headers = {
+        "Content-Type": AUDIO_MIME[path.extname(name).toLowerCase()] || "application/octet-stream",
+        "Accept-Ranges": "bytes", "Cache-Control": "public, max-age=86400",
+      };
+      const range = req.headers.range;
+      let start = 0, end = st.size - 1, code = 200;
+      if (range) {
+        const m = /^bytes=(\d*)-(\d*)$/.exec(String(range).trim());
+        if (!m || (m[1] === "" && m[2] === "")) { res.writeHead(416, { "Content-Range": "bytes */" + st.size }); return res.end(); }
+        if (m[1] === "") { start = Math.max(0, st.size - parseInt(m[2], 10)); }
+        else { start = parseInt(m[1], 10); if (m[2] !== "") end = Math.min(parseInt(m[2], 10), st.size - 1); }
+        if (start > end || start >= st.size) { res.writeHead(416, { "Content-Range": "bytes */" + st.size }); return res.end(); }
+        code = 206; headers["Content-Range"] = "bytes " + start + "-" + end + "/" + st.size;
+      }
+      headers["Content-Length"] = end - start + 1;
+      res.writeHead(code, headers);
+      if (req.method === "HEAD") return res.end();
+      const rs = fs.createReadStream(fp, { start, end });
+      rs.on("error", () => res.destroy());
+      rs.pipe(res);
+    });
   }
 
   /* ---- serve an uploaded advert image from the Disk ---- */
@@ -516,6 +873,19 @@ const httpServer = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
   }
 
+  /* ---- grant / revoke a member's permission to render (God Admin only) ---- */
+  if (p === "/api/members/render" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can do this." });
+    const target = db.users.find((x) => x.id === String(body.id));
+    if (!target) return sendJson(res, 404, { ok: false, error: "Not found." });
+    if (target.role === "god") return sendJson(res, 400, { ok: false, error: "The God Admin can always render." });
+    target.canRender = body.allow === true;
+    saveJson(USERS_FILE, db);
+    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+  }
+
   /* ---- change my own name (not the two protected logins' identity rules) ---- */
   if (p === "/api/me/name" && req.method === "POST") {
     const body = await readBody(req);
@@ -592,6 +962,10 @@ wss.on("connection", (ws) => {
   ws.id = String(nextWsId++);
   ws.staff = null; ws.peer = null; ws.callState = null;
   broadcast({ type: "presence", count: wss.clients.size });
+  // Tell the newcomer whether a presenter is live (drives the fill-in music).
+  sendTo(ws, { type: "onair", live: onAir });
+  // If something is being rendered right now, show it to the newcomer too.
+  if (liveDisplay) sendTo(ws, { type: "display", display: liveDisplay });
   // Send the recent conversation so the newcomer sees what came before.
   pruneChat();
   ws.send(JSON.stringify({ type: "history", messages: chatLog.messages }));
@@ -606,6 +980,21 @@ wss.on("connection", (ws) => {
       chatLog.messages = [];
       saveJson(CHAT_FILE, chatLog);
       broadcast({ type: "cleared", by: sanitize(u.name, 40) });
+      return;
+    }
+
+    /* ---- live display: render scripture/text/image over the listeners' chat ---- */
+    if (d.type === "display-set" || d.type === "display-clear") {
+      const u = d.token ? userFromToken(String(d.token)) : null;
+      if (!u) return;   // logged-in staff only
+      if (!canRender(u)) { sendTo(ws, { type: "display-error", error: "You don't have permission to render. Ask the God Admin." }); return; }
+      if (d.type === "display-clear") { liveDisplay = null; }
+      else {
+        const clean = cleanDisplay(d.display);
+        if (!clean) { sendTo(ws, { type: "display-error", error: "That couldn't be displayed." }); return; }
+        liveDisplay = { ...clean, ts: Date.now(), by: sanitize(u.name, 40) };
+      }
+      broadcast({ type: "display", display: liveDisplay });
       return;
     }
 
@@ -684,6 +1073,10 @@ setInterval(() => {
     broadcast({ type: "history", messages: chatLog.messages });
   }
 }, 60 * 1000);
+
+// Watch the Famcast stream so listeners switch between live and fill-in music.
+setTimeout(pollOnAir, 1000);
+setInterval(pollOnAir, 10 * 1000);
 
 httpServer.listen(PORT, () => {
   console.log(`\n  Ramatlabama FM server running: http://localhost:${PORT}`);

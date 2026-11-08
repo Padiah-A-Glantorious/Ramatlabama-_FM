@@ -85,6 +85,10 @@
 
     // Manager-only tabs
     document.querySelectorAll(".manage-only").forEach((el) => { el.hidden = !isManager(); });
+    // Render tab: God Admin always, others only when God grants it.
+    document.querySelectorAll(".render-only").forEach((el) => { el.hidden = !me.canRender; });
+    // Music tab: God Admin only.
+    document.querySelectorAll(".god-only").forEach((el) => { el.hidden = me.role !== "god"; });
 
     // Prefill settings
     byId("setName").value = me.name || "";
@@ -95,6 +99,8 @@
     loadMembers();     // everyone can view the members list
     connectChat();
     if (window.RFM_STUDIO) window.RFM_STUDIO.start(token);
+    if (window.RFM_RENDER && me.canRender) window.RFM_RENDER.start(token);
+    if (window.RFM_MUSIC && me.role === "god") window.RFM_MUSIC.start(token);
     if (isManager()) loadAdverts();
   }
 
@@ -247,13 +253,18 @@
           actions += `<button class="m-btn elevate" data-id="${m.id}">↑ Elevate</button>`;
         else if (m.role === "elevated")
           actions += `<button class="m-btn revoke" data-id="${m.id}">↓ Revoke to presenter</button>`;
+        // Only the God Admin decides who may render scripture/text/pictures.
+        if (meRole === "god" && m.role !== "god")
+          actions += m.canRender
+            ? `<button class="m-btn revoke-render" data-id="${m.id}">📖 Revoke Render</button>`
+            : `<button class="m-btn grant-render" data-id="${m.id}">📖 Allow Render</button>`;
         // Delete: any non-god account, but never your own.
         if (m.role !== "god" && !isSelf)
           actions += `<button class="m-btn delete" data-id="${m.id}" data-name="${escAttr(m.name)}">🗑 Delete</button>`;
       }
       row.innerHTML = `
         <div class="member-info">
-          <div class="member-name">${escHtml(m.name)} ${roleTag(m.role)}</div>
+          <div class="member-name">${escHtml(m.name)} ${roleTag(m.role)}${m.canRender && m.role !== "god" ? ' <span class="role-tag render-tag">📖 Render</span>' : ""}</div>
           ${titleHtml}
         </div>
         <div class="member-actions">${actions}</div>`;
@@ -266,6 +277,10 @@
     if (btn.classList.contains("revoke")) {
       if (!confirm("Revoke elevated access? They drop to base-level presenter (account kept).")) return;
       await memberAction("/api/members/revoke", { id });
+    } else if (btn.classList.contains("grant-render")) {
+      await memberAction("/api/members/render", { id, allow: true });
+    } else if (btn.classList.contains("revoke-render")) {
+      await memberAction("/api/members/render", { id, allow: false });
     } else if (btn.classList.contains("elevate")) {
       await memberAction("/api/members/setrole", { id, role: "elevated" });
     } else if (btn.classList.contains("delete")) {

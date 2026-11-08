@@ -41,64 +41,332 @@
   }
 
   const streamUrl = (cfg.streamUrl || "").trim();
-  if (streamUrl) player.src = streamUrl; else setStatus("No stream URL set — add it in config.js");
+  if (!streamUrl) setStatus("No stream URL set — add it in config.js");
   if (volume) {
     player.volume = parseFloat(volume.value);
-    volume.addEventListener("input", () => { player.volume = parseFloat(volume.value); });
+    volume.addEventListener("input", () => {
+      player.volume = parseFloat(volume.value);
+      if (yt && yt.setVolume) { try { yt.setVolume(Math.round(player.volume * 100)); } catch (_) {} }
+    });
   }
 
+  /* ---- Live show vs fill-in music ----
+     The server tells us whether a presenter is on air (it watches Famcast).
+     Off air: play the God Admin's fill-in music for the current time slot,
+     mixing uploaded songs (the <audio> element) and YouTube links (a visible
+     YouTube player). On air: switch to the live stream straight away. */
+  let intent = false;       // has the listener asked to listen?
+  let mode = null;          // "live" | "music" (uploaded song) | "yt" (YouTube) | null
+  let onAir = null;         // null until the server tells us
+  let switching = false;    // true while we change the <audio> source ourselves
+  let musicCache = { tracks: [], links: [], genre: "", slot: "" };
+  let recent = [];          // recently played ids (avoid repeats)
+  let nowTitle = "";
+  let musicErrors = 0;
+  let retryTimer = 0;
+
+  /* ---- YouTube fill-in music: audio only (the player is kept off-screen) ---- */
+  let ytApi = null, yt = null, ytItem = null, ytTimer = 0, ytShuffled = false;
+  let ytBlocked = false;    // this browser won't play hidden YouTube audio: use uploaded songs instead
+  let ytDownUntil = 0;      // YouTube couldn't load: skip YouTube links until this time
+  let ytVid = null, ytSongs = 0;   // songs played in the current playlist turn
+  const SONGS_PER_TURN = 3;        // then rotate to another playlist / song in the same genre
+  function loadYtApi() {
+    if (ytApi) return ytApi;
+    ytApi = new Promise((resolve, reject) => {
+      if (window.YT && window.YT.Player) return resolve();
+      const prev = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => { try { if (prev) prev(); } catch (_) {} resolve(); };
+      const s = document.createElement("script");
+      s.src = "https://www.youtube.com/iframe_api"; s.async = true;
+      s.onerror = () => { ytApi = null; reject(new Error("YouTube unreachable")); };
+      document.head.appendChild(s);
+      setTimeout(() => { if (!(window.YT && window.YT.Player)) { ytApi = null; reject(new Error("YouTube timeout")); } }, 30000);   // slow mobile data
+    });
+    return ytApi;
+  }
+  // Playing or buffering (3) both count as "music is on", so the button never flips back mid-song.
+  function ytPlaying() { try { const s = yt && yt.getPlayerState ? yt.getPlayerState() : -1; return s === 1 || s === 3; } catch (_) { return false; } }
+  function stopYt() {
+    clearTimeout(ytTimer);
+    if (yt) { try { yt.destroy(); } catch (_) {} yt = null; }
+    ytItem = null;
+    const box = byId("ytMusicBox"); if (box) box.innerHTML = '<div id="ytMusicPlayer"></div>';
+  }
+  function showYtTitle(t) {
+    nowTitle = t;
+    setStatus("♪ " + t);
+  }
+  function playYt(item) {
+    clearTimeout(retryTimer);
+    mode = "yt";                                     // set first: the <audio> pause below is then ignored
+    try { player.pause(); } catch (_) {}
+    if (player.getAttribute("src")) { player.removeAttribute("src"); try { player.load(); } catch (_) {} }
+    stopYt();
+    mode = "yt"; ytItem = item; ytShuffled = false; ytVid = null; ytSongs = 0;
+    showYtTitle(item.title);
+    setButton(); setPill();
+    loadYtApi().then(() => {
+      if (mode !== "yt" || ytItem !== item) return;   // something else took over meanwhile
+      const vars = { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, iv_load_policy: 3 };
+      const opts = {
+        width: "100%", height: "100%", host: "https://www.youtube-nocookie.com", playerVars: vars,
+        events: {
+          onReady: (e) => {
+            try { e.target.setVolume(Math.round(player.volume * 100)); } catch (_) {}
+            try { e.target.playVideo(); } catch (_) {}
+            // Phones may refuse to start without a tap: say so instead of sitting silent.
+            ytTimer = setTimeout(() => { if (mode === "yt" && ytItem === item && !ytPlaying()) armFirstInteractionAutoplay(); }, 5000);
+          },
+          onStateChange: (e) => {
+            if (mode !== "yt" || ytItem !== item) return;
+            const S = window.YT.PlayerState;
+            if (e.data === S.PLAYING) {
+              musicErrors = 0; intent = true;
+              if (item.kind === "playlist" && !ytShuffled) {      // start the playlist at a random song
+                ytShuffled = true;
+                try {
+                  const pl = e.target.getPlaylist() || [];
+                  e.target.setShuffle(true);
+                  if (pl.length > 1) { ytVid = null; ytSongs = 0; e.target.playVideoAt(Math.floor(Math.random() * pl.length)); return; }
+                } catch (_) {}
+              }
+              const d = e.target.getVideoData ? e.target.getVideoData() : null;
+              // Rotate: after a few songs from one playlist, move on to another playlist/song.
+              const vid = d && d.video_id;
+              if (vid && vid !== ytVid) {
+                ytVid = vid; ytSongs++;
+                if (item.kind === "playlist" && ytSongs > SONGS_PER_TURN && fillPoolSize() > 1) { if (!nextFill()) offAirIdle(); return; }
+              }
+              showYtTitle((d && d.title) || item.title);
+              setButton(); setPill();
+            } else if (e.data === S.BUFFERING) {
+              setButton(); setPill();
+            } else if (e.data === S.PAUSED) {
+              // Listeners can't pause the fill-in music: carry on playing.
+              if (intent) { try { e.target.playVideo(); } catch (_) {} }
+            } else if (e.data === S.ENDED) {
+              if (item.kind === "playlist") {
+                try { const pl = e.target.getPlaylist() || []; if (pl.length && e.target.getPlaylistIndex() < pl.length - 1) return; } catch (_) {}
+              }
+              if (intent) { if (!nextFill()) offAirIdle(); }
+            }
+          },
+          onError: (e) => {
+            if (mode !== "yt" || ytItem !== item) return;
+            if (++musicErrors > 3) { musicErrors = 0; if (!nextFill()) offAirIdle(); return; }
+            if (item.kind === "playlist") { try { e.target.nextVideo(); return; } catch (_) {} }   // skip a blocked song
+            if (!nextFill()) offAirIdle();
+          },
+        },
+      };
+      if (item.kind === "playlist") { vars.listType = "playlist"; vars.list = item.ytId; }
+      else opts.videoId = item.ytId;
+      yt = new window.YT.Player("ytMusicPlayer", opts);
+    }).catch(() => {
+      if (mode !== "yt" || ytItem !== item) return;
+      // YouTube unreachable for now: play uploaded songs meanwhile, and try YouTube again soon.
+      ytDownUntil = Date.now() + 20000;
+      if (!nextFill()) { setStatus("Loading music…"); clearTimeout(retryTimer); retryTimer = setTimeout(() => { if (intent && onAir !== true) go(); }, 5000); }
+    });
+  }
+
+  function isPlaying() { return mode === "yt" ? ytPlaying() : !player.paused; }
+  function setPill() {
+    if (!livePill || !liveLabel) return;
+    const music = intent && (mode === "music" || mode === "yt") && isPlaying();
+    livePill.classList.toggle("on", onAir === true || music);
+    liveLabel.textContent = onAir === true ? "LIVE" : music ? "MUSIC" : "OFFLINE";
+  }
+  function setButton() {
+    if (!heroPlay) return;
+    heroPlay.classList.remove("loading");
+    const playing = intent && isPlaying();
+    const music = mode === "music" || mode === "yt";
+    // While fill-in music plays the button is only a label: listeners can't pause it.
+    heroPlay.classList.toggle("is-locked", playing && music);
+    heroPlay.setAttribute("aria-disabled", playing && music ? "true" : "false");
+    heroPlay.textContent = playing ? (music ? "♪ Music playing" : "⏸ Playing Live") : "▶ Listen Live";
+  }
+  function fillPoolSize() {   // how many songs/links can play right now
+    return musicCache.tracks.length + (ytBlocked || Date.now() < ytDownUntil ? 0 : musicCache.links.length);
+  }
+  function refreshMusic() {
+    return fetch("/api/music/now", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((m) => {
+        if (!m || !m.ok) return null;
+        const slotChanged = musicCache.slot && m.slot !== musicCache.slot;
+        musicCache = {
+          tracks: Array.isArray(m.tracks) ? m.tracks : [],
+          links: Array.isArray(m.links) ? m.links : [],
+          genre: m.genre || "", slot: m.slot || "",
+        };
+        if (m.known) setOnAir(!!m.live);
+        // New time slot (e.g. Gospel -> Jazz) while a long YouTube playlist plays: move on now.
+        if (slotChanged && intent && mode === "yt" && onAir !== true) {
+          const still = ytItem && musicCache.links.some((l) => l.id === ytItem.id);
+          if (!still && !nextFill()) offAirIdle();
+        }
+        return m;
+      })
+      .catch(() => null);
+  }
+  function pickItem() {
+    const list = [
+      ...musicCache.tracks.map((t) => ({ ...t, type: "file" })),
+      ...(ytBlocked || Date.now() < ytDownUntil ? [] : musicCache.links).map((l) => ({ ...l, type: "yt" })),
+    ];
+    if (!list.length) return null;
+    let pool = list.filter((t) => !recent.includes(t.id));
+    if (!pool.length) { recent = []; pool = list; }
+    const t = pool[Math.floor(Math.random() * pool.length)];
+    recent.push(t.id);
+    while (recent.length > Math.max(1, Math.floor(list.length * 0.6))) recent.shift();
+    return t;
+  }
+  function onPlayReject(err) {
+    switching = false;
+    if (err && err.name === "NotAllowedError") armFirstInteractionAutoplay();
+    // Other failures surface through the "error" event below.
+  }
+  function playStream() {
+    clearTimeout(retryTimer);
+    if (mode === "yt") stopYt();
+    if (!streamUrl) { setStatus("No stream URL set — add it in config.js"); return; }
+    mode = "live"; switching = true;
+    setStatus("Connecting…");
+    player.src = streamUrl + (streamUrl.includes("?") ? "&" : "?") + "t=" + Date.now();   // fresh connection
+    player.play().catch(onPlayReject);
+  }
+  function nextFill() {      // play the next fill-in item; false when there's nothing to play
+    clearTimeout(retryTimer);
+    const it = pickItem();
+    refreshMusic();          // keep the list fresh (new slot, new uploads/links)
+    if (!it) { if (mode === "yt") stopYt(); return false; }
+    if (it.type === "yt") { playYt(it); return true; }
+    if (mode === "yt") stopYt();
+    mode = "music"; switching = true; nowTitle = it.title;
+    player.src = it.url;
+    player.play().catch(onPlayReject);
+    return true;
+  }
+  function offAirIdle() {    // nobody live and no music: wait and try again
+    if (mode === "yt") stopYt();
+    mode = "live";
+    setStatus("We're off air right now. Back soon.");
+    setButton(); setPill();
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => { if (intent) go(); }, 30000);
+  }
+  function go() {            // start whatever should be playing right now
+    if (onAir === false) { if (!nextFill()) playStream(); }
+    else playStream();
+  }
+  function setOnAir(live) {
+    const was = onAir;
+    onAir = live;
+    setPill();
+    if (!intent || was === live || was === null) return;   // first answer only informs go()
+    if (live && mode !== "live") { setStatus("We're live! Switching…"); playStream(); }
+    else if (!live && mode === "live") { if (!nextFill()) offAirIdle(); }
+  }
+  // Every minute while music plays, check for a new time slot (Gospel -> Jazz etc.).
+  setInterval(() => { if (intent && onAir === false && (mode === "music" || mode === "yt")) refreshMusic(); }, 60000);
+
   function togglePlay() {
-    if (!streamUrl) { setStatus("⚠ Add the stream URL in config.js first."); return; }
-    if (player.paused) {
-      if (heroPlay) heroPlay.classList.add("loading");
-      setStatus("Connecting…");
-      if (player.src !== streamUrl) player.src = streamUrl;
-      player.load();
-      player.play().catch((err) => {
-        setStatus("Couldn't play. Check the stream URL / CORS. (" + (err.name || "error") + ")");
-      }).finally(() => { if (heroPlay) heroPlay.classList.remove("loading"); });
-    } else {
-      player.pause();
+    if (intent && isPlaying()) {
+      if (mode === "music" || mode === "yt") return;   // fill-in music can't be paused
+      intent = false; clearTimeout(retryTimer);
+      if (mode === "yt") { try { yt.pauseVideo(); } catch (_) {} } else player.pause();
+      setStatus("Paused"); setButton(); setPill();
+      return;
     }
+    intent = true;
+    if (heroPlay) heroPlay.classList.add("loading");
+    if (mode === "yt" && yt && onAir !== true) { try { yt.playVideo(); return; } catch (_) {} }
+    // Resume a paused song where it stopped; otherwise start fresh.
+    if (mode === "music" && onAir !== true && player.src && !player.ended && player.currentTime > 0) {
+      player.play().catch(onPlayReject);
+    } else go();
   }
   if (heroPlay) heroPlay.addEventListener("click", togglePlay);
 
   /* ---- Autoplay (with first-interaction fallback) ---- */
-  function startRadio() {
-    if (!streamUrl) return Promise.reject();
-    if (player.src !== streamUrl) player.src = streamUrl;
-    return player.play();
-  }
+  let armed = false;
   function armFirstInteractionAutoplay() {
+    if (armed) return;
+    armed = true;
     setStatus("Tap anywhere to start listening 🔊");
-    const kick = () => { startRadio().catch(() => {}); remove(); };
-    const evs = ["pointerdown", "keydown", "touchstart", "scroll"];
-    const remove = () => evs.forEach((e) => window.removeEventListener(e, kick));
-    evs.forEach((e) => window.addEventListener(e, kick, { once: true, passive: true }));
+    setButton();
+    const evs = ["pointerdown", "keydown", "touchstart"];
+    const kick = (e) => {
+      remove(); armed = false;
+      if (heroPlay && e && e.target && heroPlay.contains(e.target)) return;   // the button handles itself
+      if (!intent) return;
+      if (mode === "yt" && yt) {
+        try { yt.playVideo(); } catch (_) {}
+        // Some phones (mostly iPhones) never play hidden YouTube audio, even after a tap.
+        // Then use uploaded songs for this visit, if there are any.
+        const item = ytItem;
+        setTimeout(() => {
+          if (mode !== "yt" || ytItem !== item || ytPlaying()) return;
+          ytBlocked = true;
+          if (musicCache.tracks.length) nextFill();
+          else setStatus("Music can't play on this device right now. We'll be live soon.");
+        }, 4000);
+        return;
+      }
+      go();
+    };
+    const remove = () => evs.forEach((ev) => window.removeEventListener(ev, kick));
+    evs.forEach((ev) => window.addEventListener(ev, kick, { passive: true }));
   }
   function tryAutoplay() {
-    if (!streamUrl) { setStatus("No stream URL set — add it in config.js"); return; }
+    if (!streamUrl) return;
+    intent = true;
     setStatus("Connecting…");
-    startRadio().catch(() => armFirstInteractionAutoplay());
+    // Learn whether we're live first, so off-air visitors go straight to music.
+    Promise.race([refreshMusic(), new Promise((r) => setTimeout(r, 2500))]).then(go);
   }
   if (document.readyState !== "loading") tryAutoplay();
   else window.addEventListener("DOMContentLoaded", tryAutoplay);
 
   player.addEventListener("playing", () => {
-    if (heroPlay) { heroPlay.textContent = "⏸ Playing Live"; heroPlay.classList.remove("loading"); }
-    setStatus("● LIVE");
-    setLive(true);
+    switching = false;
+    if (mode === "yt") return;
+    if (mode === "music") { musicErrors = 0; setStatus("♪ " + nowTitle); }
+    else setStatus("● LIVE");
+    setButton(); setPill();
   });
   player.addEventListener("pause", () => {
-    if (heroPlay) heroPlay.textContent = "▶ Listen Live";
-    setStatus("Paused");
-    setLive(false);
+    // Ignore pauses we cause by changing songs or handing over to YouTube.
+    if (switching || player.ended || mode === "yt") return;
+    // Fill-in music can't be paused (e.g. by headphone/keyboard media keys): resume it.
+    if (mode === "music" && intent) { setTimeout(() => { if (mode === "music" && player.paused && !player.ended) player.play().catch(onPlayReject); }, 0); return; }
+    intent = false; clearTimeout(retryTimer);
+    setStatus("Paused"); setButton(); setPill();
   });
-  player.addEventListener("waiting", () => setStatus("Buffering…"));
+  player.addEventListener("ended", () => {
+    if (!intent || mode === "yt") return;
+    if (mode === "music") { if (onAir === true) playStream(); else if (!nextFill()) offAirIdle(); }
+    else if (onAir === true) { retryTimer = setTimeout(playStream, 3000); }   // brief drop: reconnect
+    else if (!nextFill()) offAirIdle();
+  });
+  player.addEventListener("waiting", () => { if (intent && mode !== "yt") setStatus("Buffering…"); });
   player.addEventListener("error", () => {
-    setLive(false);
-    if (heroPlay) heroPlay.textContent = "▶ Listen Live";
-    setStatus("Stream error — verify the URL in config.js is a direct audio link.");
+    switching = false;
+    if (mode === "yt" || !player.getAttribute("src")) return;   // we emptied it on purpose
+    if (!intent) { setButton(); setPill(); return; }
+    if (mode === "music") {
+      // A bad file: skip it; after a few failures in a row, give up for now.
+      if (++musicErrors <= 3) { setTimeout(() => { if (intent && !nextFill()) offAirIdle(); }, 1000); }
+      else { musicErrors = 0; offAirIdle(); }
+      return;
+    }
+    // Live stream failed: presenter live -> reconnect; nobody live -> fill-in music.
+    if (onAir === true) { setStatus("Reconnecting…"); retryTimer = setTimeout(playStream, 4000); }
+    else if (!nextFill()) offAirIdle();
   });
 
   /* ===================================================================
@@ -471,6 +739,12 @@
           addMessage({ system: true, text: "Chat was cleared by the station." });
         } else if (d.type === "system") {
           addMessage({ system: true, text: d.text });
+        } else if (d.type === "onair") {
+          setOnAir(!!d.live);   // presenter went live / off air -> switch live <-> music
+        } else if (d.type === "music-changed") {
+          refreshMusic();       // God Admin changed songs, links or time slots
+        } else if (d.type === "display") {
+          if (window.RFM_DISPLAY) window.RFM_DISPLAY.show(d.display || null);   // presenter rendered / cleared
         } else if (d.type === "content-updated") {
           loadLiveContent();   // admin changed shows/news — refresh
         }

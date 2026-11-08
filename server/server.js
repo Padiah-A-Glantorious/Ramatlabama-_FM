@@ -375,6 +375,33 @@ try {
   }
 } catch (_) { console.warn("ICE_SERVERS env var is not valid JSON; using default STUN."); }
 
+// Cloudflare TURN: set CF_TURN_KEY_ID and CF_TURN_API_TOKEN on Render. The key stays on
+// the server; browsers only get short-lived credentials (6 h), refreshed every hour.
+const CF_TURN_KEY_ID = (process.env.CF_TURN_KEY_ID || "").trim();
+const CF_TURN_API_TOKEN = (process.env.CF_TURN_API_TOKEN || "").trim();
+let cfIce = null, cfIceAt = 0, cfIceFail = 0;
+async function getIceServers() {
+  if (!CF_TURN_KEY_ID || !CF_TURN_API_TOKEN) return ICE_SERVERS;
+  if (cfIce && Date.now() - cfIceAt < 60 * 60 * 1000) return cfIce;
+  if (Date.now() - cfIceFail < 60 * 1000) return cfIce || ICE_SERVERS;   // don't hammer after an error
+  try {
+    const r = await fetch("https://rtc.live.cloudflare.com/v1/turn/keys/" + encodeURIComponent(CF_TURN_KEY_ID) + "/credentials/generate-ice-servers", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + CF_TURN_API_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl: 6 * 60 * 60 }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !Array.isArray(j.iceServers) || !j.iceServers.length) throw new Error("Cloudflare TURN " + r.status);
+    cfIce = j.iceServers; cfIceAt = Date.now();
+    return cfIce;
+  } catch (e) {
+    cfIceFail = Date.now();
+    console.warn("Cloudflare TURN credentials failed:", e.message);
+    return cfIce || ICE_SERVERS;
+  }
+}
+
 /* ================= CHAT HISTORY ================= */
 // Recent chat messages, persisted so listeners/presenters see the
 // conversation so far when they join. Capped at CHAT_HISTORY_MAX.
@@ -563,7 +590,7 @@ const httpServer = http.createServer(async (req, res) => {
 
   /* ---- public: ICE servers for call-in (STUN + optional TURN from env) ---- */
   if (p === "/api/ice" && req.method === "GET") {
-    return sendJson(res, 200, { iceServers: ICE_SERVERS });
+    return sendJson(res, 200, { iceServers: await getIceServers() });
   }
 
   /* ---- staff: look up a Bible passage (proxied to bible-api.com) ---- */

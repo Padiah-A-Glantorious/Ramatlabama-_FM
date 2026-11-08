@@ -503,6 +503,22 @@ function publicUser(u) {   // for the logged-in user's own identity
 function memberView(u) {   // for the Members list — NO email shown
   return { id: u.id, name: u.name, title: u.title, role: u.role, canRender: canRender(u) };
 }
+// The Members list as the viewer may see it: the God Admin also sees emails/logins.
+// Passwords are never sent to any browser.
+function membersFor(viewer) {
+  const god = viewer && viewer.role === "god";
+  return db.users.map((x) => (god ? { ...memberView(x), email: x.email || "", login: x.login || "" } : memberView(x)));
+}
+// What a reset sets an account back to: the protected logins have their own defaults.
+function defaultPasswordFor(u) {
+  if (u.login === "GOD_Admin") return GOD_PASSWORD_DEFAULT;
+  if (u.login === "CEO_Kutlwano_Nqaba") return CEO_PASSWORD_DEFAULT;
+  return PRESENTER_PASSWORD_DEFAULT;
+}
+function endSessionsOf(userId) {   // log the person out everywhere (e.g. after a reset)
+  for (const [t, s] of sessions) if (s.id === userId) sessions.delete(t);
+  saveSessionsSoon();
+}
 function accessLabel(role) {
   return role === "god" ? "God Admin" : role === "elevated" ? "Elevated Access" : "Presenter";
 }
@@ -887,7 +903,7 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const u = authUser(body);
     if (!u) return sendJson(res, 401, { ok: false, error: "Not logged in." });
-    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
   }
 
   /* ---- enrol a new presenter email (manager only) ---- */
@@ -905,7 +921,7 @@ const httpServer = http.createServer(async (req, res) => {
       role: "presenter", password: PRESENTER_PASSWORD_DEFAULT,
     });
     saveJson(USERS_FILE, db);
-    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
   }
 
   /* ---- "revoke" = demote to base-level presenter (NOT delete) ---- */
@@ -918,7 +934,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (!canActOn(u, target)) return sendJson(res, 403, { ok: false, error: "You can't manage this account." });
     target.role = "presenter";   // keep the account; drop to base presenter
     saveJson(USERS_FILE, db);
-    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
   }
 
   /* ---- DELETE a member entirely ---- */
@@ -933,7 +949,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (!canActOn(u, target)) return sendJson(res, 403, { ok: false, error: "You can't manage this account." });
     db.users = db.users.filter((x) => x.id !== target.id);
     saveJson(USERS_FILE, db);
-    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
   }
 
   /* ---- grant / remove elevated access (manager only) ---- */
@@ -949,7 +965,22 @@ const httpServer = http.createServer(async (req, res) => {
     if (want !== "elevated" && want !== "presenter") return sendJson(res, 400, { ok: false, error: "Bad role." });
     target.role = want;
     saveJson(USERS_FILE, db);
-    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+  }
+
+  /* ---- reset a member's password to the default (God Admin only) ---- */
+  if (p === "/api/members/reset-password" && req.method === "POST") {
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can reset passwords." });
+    const target = db.users.find((x) => x.id === String(body.id));
+    if (!target) return sendJson(res, 404, { ok: false, error: "Not found." });
+    if (target.id === u.id) return sendJson(res, 400, { ok: false, error: "Change your own password in Settings." });
+    target.password = defaultPasswordFor(target);
+    saveJson(USERS_FILE, db);
+    endSessionsOf(target.id);   // they log in again with the default password
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role),
+      note: target.name + "'s password is reset to the default. They've been logged out and can log in with " + (target.login || target.email) + " and the default password." });
   }
 
   /* ---- edit a member's title (manager only) ---- */
@@ -962,7 +993,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (!canActOn(u, target)) return sendJson(res, 403, { ok: false, error: "You can't manage this account." });
     target.title = sanitize(body.title, 40).trim() || target.title;
     saveJson(USERS_FILE, db);
-    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
   }
 
   /* ---- grant / revoke a member's permission to render (God Admin only) ---- */
@@ -975,7 +1006,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (target.role === "god") return sendJson(res, 400, { ok: false, error: "The God Admin can always render." });
     target.canRender = body.allow === true;
     saveJson(USERS_FILE, db);
-    return sendJson(res, 200, { ok: true, members: db.users.map(memberView), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
+    return sendJson(res, 200, { ok: true, members: membersFor(u), meId: u.id, meRole: u.role, canManage: canManage(u.role) });
   }
 
   /* ---- change my own name (not the two protected logins' identity rules) ---- */

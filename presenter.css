@@ -331,3 +331,6 @@ a.m-btn { text-decoration: none; display: inline-block; }
 .ring-text small { color: var(--muted); font-size: 12px; }
 @keyframes ringPulse { 0%, 100% { box-shadow: 0 12px 40px rgba(0,0,0,0.6), 0 0 0 0 rgba(212,175,55,0.5); } 50% { box-shadow: 0 12px 40px rgba(0,0,0,0.6), 0 0 0 8px rgba(212,175,55,0); } }
 @media (prefers-reduced-motion: reduce) { .ring-banner { animation: none; } }
+
+/* God Admin: member email under the name */
+.member-email { font-size: 12px; color: var(--muted); margin-top: 2px; word-break: break-all; }

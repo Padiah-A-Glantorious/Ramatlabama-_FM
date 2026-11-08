@@ -253,6 +253,9 @@
           actions += `<button class="m-btn elevate" data-id="${m.id}">↑ Elevate</button>`;
         else if (m.role === "elevated")
           actions += `<button class="m-btn revoke" data-id="${m.id}">↓ Revoke to presenter</button>`;
+        // God Admin: put someone's password back to the default (never shown on screen).
+        if (meRole === "god" && !isSelf)
+          actions += `<button class="m-btn reset-pw" data-id="${m.id}" data-name="${escAttr(m.name)}">🔑 Reset password</button>`;
         // Only the God Admin decides who may render scripture/text/pictures.
         if (meRole === "god" && m.role !== "god")
           actions += m.canRender
@@ -265,6 +268,7 @@
       row.innerHTML = `
         <div class="member-info">
           <div class="member-name">${escHtml(m.name)} ${roleTag(m.role)}${m.canRender && m.role !== "god" ? ' <span class="role-tag render-tag">📖 Render</span>' : ""}</div>
+          ${m.email || m.login ? `<div class="member-email">✉ ${escHtml(m.email || "")}${m.login ? (m.email ? " · " : "") + "login: " + escHtml(m.login) : ""}</div>` : ""}
           ${titleHtml}
         </div>
         <div class="member-actions">${actions}</div>`;
@@ -277,6 +281,9 @@
     if (btn.classList.contains("revoke")) {
       if (!confirm("Revoke elevated access? They drop to base-level presenter (account kept).")) return;
       await memberAction("/api/members/revoke", { id });
+    } else if (btn.classList.contains("reset-pw")) {
+      if (!confirm("Reset " + (btn.dataset.name || "this member") + "'s password to the default?\n\nThey'll be logged out and must log in again with the default password.")) return;
+      await memberAction("/api/members/reset-password", { id });
     } else if (btn.classList.contains("grant-render")) {
       await memberAction("/api/members/render", { id, allow: true });
     } else if (btn.classList.contains("revoke-render")) {
@@ -313,7 +320,7 @@
       const res = await r.json();
       if (!r.ok || !res.ok) return setState("membersState", res.error || "Failed", false);
       members = res.members; meId = res.meId; meRole = res.meRole || meRole; meCanManage = !!res.canManage; renderMembers();
-      setState("membersState", "✓ Done", true);
+      setState("membersState", res.note ? "✓ " + res.note : "✓ Done", true);
     } catch (_) { setState("membersState", "Can't reach server", false); }
   }
   byId("enrolForm").addEventListener("submit", async (e) => {

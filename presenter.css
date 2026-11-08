@@ -301,3 +301,33 @@ a.m-btn { text-decoration: none; display: inline-block; }
   .music-def select, .music-day .music-def select { max-width: none; }
   .music-slot select { flex-basis: calc(100% - 44px); }
 }
+
+/* ---------- Studio: lines, co-host ---------- */
+#lineList { display: flex; flex-direction: column; gap: 10px; }
+#lineList .live-call { padding: 10px 12px; border-radius: 11px; background: rgba(44,44,48,0.85); border: 1px solid var(--glass-border); }
+#lineList .live-top strong .role-tag, .queue-who strong .role-tag { margin-left: 8px; vertical-align: middle; }
+#cohostQueue .queue-row { border-color: rgba(212,175,55,0.5); }
+.cohost-card { margin-bottom: 16px; }
+.cohost-card .live-actions { flex-wrap: wrap; }
+.cohost-card .meter { margin: 12px 0 0; }
+#cohostCallers { margin-top: 12px; }
+#hostToggleBtn.btn-danger { padding: 10px 18px; }
+
+.pres-msg-time { font-weight: 600; color: var(--faint); font-size: 11px; margin-left: 6px; }
+
+/* ---------- Co-host invitations ---------- */
+.invite-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.invite-row select { flex: 1 1 200px; }
+#inviteList .queue-row { margin-top: 8px; border-color: rgba(212,175,55,0.5); }
+.ring-banner {
+  position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 1000;
+  width: min(560px, calc(100% - 24px)); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 14px 16px; border-radius: 14px; background: rgba(28,24,18,0.97); border: 1px solid rgba(212,175,55,0.8);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6); animation: ringPulse 1.2s ease-in-out infinite;
+}
+.ring-banner[hidden] { display: none; }
+.ring-text { display: flex; flex-direction: column; gap: 3px; }
+.ring-text strong { font-size: 15px; }
+.ring-text small { color: var(--muted); font-size: 12px; }
+@keyframes ringPulse { 0%, 100% { box-shadow: 0 12px 40px rgba(0,0,0,0.6), 0 0 0 0 rgba(212,175,55,0.5); } 50% { box-shadow: 0 12px 40px rgba(0,0,0,0.6), 0 0 0 8px rgba(212,175,55,0); } }
+@media (prefers-reduced-motion: reduce) { .ring-banner { animation: none; } }

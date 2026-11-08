@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="presenter.css?v=21" />
+  <link rel="stylesheet" href="presenter.css?v=24" />
 </head>
 <body class="presenter-body">
 
@@ -27,6 +27,17 @@
 
   <!-- ===== PORTAL ===== -->
   <div class="pres-console" id="portal" hidden>
+    <!-- Incoming co-host call: shows on every tab -->
+    <div class="ring-banner" id="ringBanner" role="alertdialog" aria-live="assertive" hidden>
+      <div class="ring-text">
+        <strong id="ringTitle">📞 Co-host call</strong>
+        <small>Answer to go on air now. Wear headphones.</small>
+      </div>
+      <div class="live-actions">
+        <button type="button" class="btn-primary" id="ringAnswerBtn">✅ Answer</button>
+        <button type="button" class="btn-danger" id="ringDeclineBtn">✖ Decline</button>
+      </div>
+    </div>
     <header class="pres-topbar">
       <div class="brand">
         <span class="brand-logo"><img src="assets/logo.webp" alt="Ramatlabama FM" /></span>
@@ -68,45 +79,65 @@
 
       <!-- STUDIO tab: take listener calls in the browser -->
       <section class="ptab-view" id="tab-studio">
+        <div class="edit-card glass render-status">
+          <div class="render-status-row">
+            <div>
+              <strong>🎙 Studio lines</strong>
+              <div class="save-state" id="hostStatus">Loading…</div>
+            </div>
+            <button type="button" class="btn-primary" id="hostToggleBtn">🎙 Open the lines (I'm hosting)</button>
+          </div>
+          <p class="edit-hint">🎧 Wear headphones while hosting. Speakers feed callers back into your mic and onto the air.</p>
+          <!-- Host only: ring a member to join the show as co-host -->
+          <div class="invite-row" id="inviteRow" hidden>
+            <select id="inviteSelect" class="music-filter" aria-label="Choose a co-host"></select>
+            <button type="button" class="add-btn" id="inviteBtn">➕ Invite co-host</button>
+          </div>
+          <div id="inviteList"></div>
+          <div class="save-state" id="studioState"></div>
+        </div>
+
+        <!-- Co-host on air: their controls. Once on air, they use the Waiting and
+             On the line lists below, just like the host. -->
+        <div class="edit-card glass cohost-card" id="cohostCard" hidden>
+          <div class="render-status-row">
+            <div>
+              <strong>🎧 Co-host</strong>
+              <div class="save-state" id="cohostStatus"></div>
+            </div>
+            <div class="live-actions">
+              <button type="button" class="add-btn" id="cohostMuteBtn">🔇 Mute my mic</button>
+              <button type="button" class="btn-danger" id="cohostLeaveBtn">⏹ Leave</button>
+            </div>
+          </div>
+          <div class="meter" id="cohostMeterWrap"><div class="meter-bar" id="cohostMeter"></div></div>
+          <audio id="cohostAudio" autoplay></audio>
+        </div>
+
         <div class="studio-grid">
           <div class="edit-card glass">
-            <div class="edit-head"><h2>📞 Caller queue</h2></div>
-            <p class="edit-hint">Listeners tap "Call the studio" on the website and wait here. Wear headphones, or the caller will hear themselves.</p>
+            <div class="edit-head"><h2>📞 Waiting</h2></div>
             <div class="call-queue" id="callQueue"><p class="edit-empty">No callers waiting.</p></div>
-            <div class="save-state" id="studioState"></div>
           </div>
 
           <div class="edit-card glass">
-            <div class="edit-head"><h2>🔴 On the line</h2></div>
-            <p class="edit-empty" id="noLive">Nobody on the line.</p>
-            <div class="live-call" id="liveCall" hidden>
-              <div class="live-top">
-                <div><strong id="liveName"></strong><small id="liveStatus"></small></div>
-                <span class="live-timer" id="liveTimer">00:00</span>
-              </div>
-              <div class="meter"><div class="meter-bar" id="meterBar"></div></div>
-              <div class="save-state" id="liveDiag"></div>
-              <div class="live-actions">
-                <button type="button" class="add-btn" id="enableSoundBtn" hidden>🔈 Click to enable sound</button>
-                <button type="button" class="add-btn" id="muteCallerBtn">🔇 Mute caller</button>
-                <button type="button" class="add-btn" id="testBeepBtn">🔔 Test speakers</button>
-                <button type="button" class="btn-danger" id="hangupBtn">⏹ Hang up</button>
-              </div>
-            </div>
-            <audio id="studioCallAudio" autoplay></audio>
+            <div class="edit-head"><h2>🔴 On the line <span class="card-sub" id="lineCount"></span></h2></div>
+            <div id="lineList"><p class="edit-empty">Nobody on the line.</p></div>
           </div>
 
           <div class="edit-card glass studio-guide">
-            <div class="edit-head"><h2>🎚 Put callers on air</h2></div>
-            <p class="edit-hint">You're already live in Miradio. Do this once, before any caller phones in:</p>
+            <div class="edit-head"><h2>🎚 Put the lines on air</h2></div>
+            <p class="edit-hint">You're already live in Miradio. Do this once at the start of the show:</p>
             <ol class="guide">
+              <li>Here, click <b>Open the lines</b>.</li>
               <li>In Miradio, click <b>TAB</b> (top right, next to TALK).</li>
               <li>Choose the <b>Chrome Tab</b> section and pick <b>this portal tab</b>.</li>
               <li>Tick <b>Also share tab audio</b>, then click <b>Share</b>.</li>
-              <li>Done. Every caller you take here now goes on air. Your voice stays on Miradio's <b>MIC</b>.</li>
+              <li>Done. Everyone you put through (callers and co-hosts) goes on air. Your own voice stays on Miradio's <b>MIC</b>.</li>
             </ol>
-            <p class="edit-hint">Keep this tab open for the whole show. Use <b>Mute caller</b> to take a caller off air. If you close or refresh this tab, share it again.</p>
-            <p class="edit-hint">The stream runs 10 to 30 seconds behind real time. Ask callers to turn their radio off.</p>
+            <p class="edit-hint">To bring in a co-host, pick them under <b>Invite co-host</b>: their portal rings, and when they answer they're on air and can put callers through too.</p>
+            <p class="edit-hint">Calls last as long as you like, with up to 8 people on the line. Each person hears you and the others, but not themselves, so there's no echo.</p>
+            <p class="edit-hint">Keep this tab open for the whole show. If you close or refresh it, the calls end and you'll need to share the tab again.</p>
           </div>
         </div>
       </section>
@@ -340,9 +371,10 @@
   </div>
 
   <script src="config.js?v=22"></script>
-  <script src="studio.js?v=4"></script>
+  <script src="callpeer.js?v=1"></script>
+  <script src="studio.js?v=7"></script>
   <script src="render.js?v=4"></script>
   <script src="music.js?v=4"></script>
-  <script src="presenter.js?v=21"></script>
+  <script src="presenter.js?v=22"></script>
 </body>
 </html>

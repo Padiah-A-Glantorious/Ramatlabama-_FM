@@ -1035,32 +1035,108 @@ function broadcast(obj) {
   const payload = JSON.stringify(obj);
   for (const c of wss.clients) if (c.readyState === 1) c.send(payload);
 }
-/* ---------- Call-in (WebRTC signalling) ----------
-   Audio itself flows peer-to-peer between the listener and the presenter's
-   browser. The server only relays the small setup messages (offer/answer/ICE)
-   and keeps the waiting queue. */
+/* ---------- Studio calls (WebRTC signalling) ----------
+   Star layout: every caller and co-host connects to the HOST's portal tab. That
+   tab mixes everyone (each person hears all the others but never themselves) and
+   its sound goes to Miradio through TAB. Audio flows browser-to-browser; the server
+   only relays setup messages and keeps the queue.
+   A call never ends just because a socket drops (phones sleep, networks blip):
+   the person reconnects with their call id + key and the audio carries on.
+   Calls end only when someone hangs up, or after a long absence. */
 let nextWsId = 1;
 function sendTo(ws, obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
-function pushCallQueue() {
-  const queue = [];
-  for (const c of wss.clients) {
-    if (c.readyState === 1 && c.callState === "waiting") queue.push({ id: c.id, name: c.callName, since: c.callSince });
-  }
-  queue.sort((a, b) => a.since - b.since);
-  for (const c of wss.clients) if (c.readyState === 1 && c.staff) sendTo(c, { type: "call-queue", queue });
+const calls = new Map();   // id -> { id, key, kind: "caller"|"cohost", name, userId, state: "waiting"|"live", ws, since, liveSince, goneAt }
+let studio = null;         // the host: { userId, name, ws, since, goneAt }
+const invites = new Map(); // co-host invitations ringing: id -> { id, userId, name, since }
+const INVITE_RING_MS = 60 * 1000;
+const MAX_ON_LINE = 8;            // people on the line with the host at once
+const MAX_WAITING = 40;
+const WAIT_GRACE = 2 * 60 * 1000; // a waiting caller who vanished is dropped after this
+const LIVE_GRACE = 10 * 60 * 1000;// someone on air whose socket died (audio may still flow)
+const HOST_GRACE = 5 * 60 * 1000; // host's page lost its connection
+const rid = (n) => crypto.randomBytes(n).toString("hex");
+const isOpen = (w) => !!(w && w.readyState === 1);
+function callView(c) {
+  return { id: c.id, kind: c.kind, name: c.name, userId: c.kind === "cohost" ? c.userId : undefined,
+    since: c.since, liveSince: c.liveSince || 0, connected: isOpen(c.ws) };
 }
-function endCall(ws, notify) {
-  const peer = ws.peer;
-  ws.peer = null; ws.callState = null;
-  if (peer) {
-    peer.peer = null; peer.callState = null;
-    if (notify) sendTo(peer, { type: "call-ended" });
-  }
+function studioPayload() {
+  const all = [...calls.values()].sort((a, b) => a.since - b.since);
+  return {
+    type: "studio",
+    host: studio ? { userId: studio.userId, name: studio.name, since: studio.since, connected: isOpen(studio.ws) } : null,
+    callers: all.filter((c) => c.kind === "caller" && c.state === "waiting").map(callView),
+    cohosts: all.filter((c) => c.kind === "cohost" && c.state === "waiting").map(callView),
+    live: all.filter((c) => c.state === "live").map(callView),
+    invites: [...invites.values()].map((v) => ({ id: v.id, userId: v.userId, name: v.name, since: v.since })),
+    online: [...new Set([...wss.clients].filter((w) => isOpen(w) && w.staffId).map((w) => w.staffId))],
+    max: MAX_ON_LINE,
+  };
 }
+function endInvite(id, reason) {
+  const v = invites.get(id);
+  if (!v) return;
+  invites.delete(id);
+  if (reason && studio) sendTo(studio.ws, { type: "studio-note", text: v.name + " " + reason });
+  pushStudio();
+}
+function pushStudio() {
+  const p = studioPayload();
+  for (const w of wss.clients) if (isOpen(w) && w.staff) sendTo(w, p);
+  // Waiting callers learn whether the studio is open, and their place in the queue.
+  p.callers.forEach((c, i) => {
+    const call = calls.get(c.id);
+    if (call) sendTo(call.ws, { type: "call-status", state: "waiting", hostOnline: !!studio, position: i + 1 });
+  });
+}
+function endCallById(id, reason, tellHost = true) {
+  const c = calls.get(id);
+  if (!c) return;
+  calls.delete(id);
+  if (c.ws && c.ws.callId === id) c.ws.callId = null;
+  sendTo(c.ws, { type: "call-ended", reason: reason || "" });
+  if (c.state === "live" && tellHost && studio) sendTo(studio.ws, { type: "peer-left", id });
+  pushStudio();
+}
+function closeStudio(reason) {
+  for (const c of [...calls.values()]) if (c.state === "live") endCallById(c.id, reason, false);
+  if (studio && studio.ws) studio.ws.isHost = false;
+  studio = null;
+  invites.clear();   // nobody to co-host with any more
+  pushStudio();
+}
+function isHostWs(ws) { return !!(studio && ws.staffId && studio.userId === ws.staffId); }
+// The host, or a co-host who is on air with the host, may put callers through.
+function canPutThrough(ws) {
+  if (!ws.staffId) return false;
+  if (isHostWs(ws)) return true;
+  for (const c of calls.values()) if (c.kind === "cohost" && c.state === "live" && c.userId === ws.staffId) return true;
+  return false;
+}
+function putOnLine(c) {
+  if (!studio || !isOpen(studio.ws)) return "The host isn't connected right now.";
+  if ([...calls.values()].filter((x) => x.state === "live").length >= MAX_ON_LINE) return "The line is full (" + MAX_ON_LINE + " people). End a call first.";
+  c.state = "live"; c.liveSince = Date.now();
+  sendTo(c.ws, { type: "call-accepted", host: studio.name });
+  sendTo(studio.ws, { type: "peer-join", id: c.id, kind: c.kind, name: c.name });
+  pushStudio();
+  return null;
+}
+// Sweep: drop people who have been gone too long.
+setInterval(() => {
+  const now = Date.now();
+  for (const c of [...calls.values()]) {
+    if (!c.goneAt) continue;
+    if (c.state === "waiting" && now - c.goneAt > WAIT_GRACE) endCallById(c.id, "");
+    else if (c.state === "live" && now - c.goneAt > LIVE_GRACE) endCallById(c.id, "The line dropped.");
+  }
+  if (studio && studio.goneAt && now - studio.goneAt > HOST_GRACE) closeStudio("The studio went offline. Please call again later.");
+  for (const v of [...invites.values()]) if (now - v.since > INVITE_RING_MS) endInvite(v.id, "didn't answer.");
+}, 5000);
 
 wss.on("connection", (ws) => {
   ws.id = String(nextWsId++);
-  ws.staff = null; ws.peer = null; ws.callState = null;
+  ws.staff = null; ws.staffId = null; ws.callId = null; ws.isHost = false;
   broadcast({ type: "presence", count: wss.clients.size });
   // Tell the newcomer whether a presenter is live (drives the fill-in music).
   sendTo(ws, { type: "onair", live: onAir });
@@ -1096,53 +1172,137 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    /* ---- call-in signalling ---- */
+    /* ---- studio calls ---- */
     if (d.type === "staff-hello") {
       const u = d.token ? userFromToken(String(d.token)) : null;
       if (!u) return;
-      ws.staff = { name: u.name, role: u.role };
-      sendTo(ws, { type: "staff-ok" });
-      pushCallQueue();
+      const wasOnline = [...wss.clients].some((w) => w !== ws && isOpen(w) && w.staffId === u.id);
+      ws.staff = { name: u.name, role: u.role }; ws.staffId = u.id;
+      sendTo(ws, { type: "staff-ok", me: { id: u.id, name: u.name } });
+      if (wasOnline) sendTo(ws, studioPayload()); else pushStudio();   // others see you come online
       return;
     }
-    if (d.type === "call-request") {
-      if (ws.staff || ws.callState) return;
+    // Host invites a member to co-host: their portal rings.
+    if (d.type === "cohost-invite") {
+      if (!isHostWs(ws)) return sendTo(ws, { type: "studio-error", error: "Only the host can invite a co-host." });
+      const target = db.users.find((x) => x.id === String(d.userId || ""));
+      if (!target || target.id === studio.userId) return sendTo(ws, { type: "studio-error", error: "Choose someone else to invite." });
+      if ([...calls.values()].some((c) => c.kind === "cohost" && c.userId === target.id && c.state === "live"))
+        return sendTo(ws, { type: "studio-error", error: target.name + " is already on air." });
+      if ([...invites.values()].some((v) => v.userId === target.id)) return;   // already ringing
+      if ([...calls.values()].filter((x) => x.state === "live").length >= MAX_ON_LINE)
+        return sendTo(ws, { type: "studio-error", error: "The line is full (" + MAX_ON_LINE + " people). End a call first." });
+      const v = { id: rid(6), userId: target.id, name: sanitize(target.name, 40) || "Co-host", since: Date.now() };
+      invites.set(v.id, v);
+      pushStudio();
+      if (![...wss.clients].some((w) => isOpen(w) && w.staffId === target.id))
+        sendTo(ws, { type: "studio-note", text: v.name + " doesn't have the portal open right now. It will ring for 60 seconds if they open it." });
+      return;
+    }
+    if (d.type === "cohost-cancel") {   // host stops ringing
+      if (isHostWs(ws)) endInvite(String(d.inviteId || ""), "");
+      return;
+    }
+    if (d.type === "cohost-decline") {   // the invited member says no
+      const v = invites.get(String(d.inviteId || ""));
+      if (v && v.userId === ws.staffId) endInvite(v.id, "declined the invitation.");
+      return;
+    }
+    // Host opens the studio (or their page reconnects). `peers` = calls the page still holds.
+    if (d.type === "host-start") {
+      const u = d.token ? userFromToken(String(d.token)) : null;
+      if (!u) return sendTo(ws, { type: "host-error", error: "Log in again to host." });
+      if (studio && studio.userId !== u.id && isOpen(studio.ws))
+        return sendTo(ws, { type: "host-error", error: studio.name + " is hosting right now." });
+      if (studio && studio.userId !== u.id) closeStudio("The studio changed hands. Please call again.");
+      // Hosting replaces any co-host call of your own.
+      for (const c of [...calls.values()]) if (c.kind === "cohost" && c.userId === u.id) endCallById(c.id, "");
+      if (!studio) studio = { userId: u.id, name: u.name, since: Date.now() };
+      if (studio.ws && studio.ws !== ws) studio.ws.isHost = false;
+      studio.ws = ws; studio.goneAt = 0; ws.isHost = true;
+      ws.staff = ws.staff || { name: u.name, role: u.role }; ws.staffId = u.id;
+      const keep = new Set((Array.isArray(d.peers) ? d.peers : []).map(String));
+      for (const c of [...calls.values()]) if (c.state === "live" && !keep.has(c.id)) endCallById(c.id, "The studio reconnected. Please call again.", false);
+      sendTo(ws, { type: "host-ok" });
+      pushStudio();
+      return;
+    }
+    if (d.type === "host-stop") {
+      if (isHostWs(ws)) closeStudio("The presenter has closed the lines. Thanks for calling!");
+      return;
+    }
+    // A listener calls in, or an invited member answers the host's co-host call.
+    if (d.type === "call-request" || d.type === "cohost-answer") {
+      if (ws.callId && calls.has(ws.callId)) return;
       if (Date.now() - (ws.lastCallReq || 0) < 3000) return;   // tiny rate limit
       ws.lastCallReq = Date.now();
-      ws.callState = "waiting";
-      ws.callName = sanitize(d.name, 24) || "Caller";
-      ws.callSince = Date.now();
-      sendTo(ws, { type: "call-status", state: "waiting" });
-      pushCallQueue();
+      let c;
+      if (d.type === "cohost-answer") {
+        const u = d.token ? userFromToken(String(d.token)) : null;
+        const v = invites.get(String(d.inviteId || ""));
+        if (!u) return sendTo(ws, { type: "call-ended", reason: "Log in again to co-host." });
+        if (!v || v.userId !== u.id) return sendTo(ws, { type: "call-ended", reason: "That invitation has ended." });
+        if (!studio || !isOpen(studio.ws)) { endInvite(v.id, ""); return sendTo(ws, { type: "call-ended", reason: "The host isn't connected right now." }); }
+        invites.delete(v.id);
+        for (const x of [...calls.values()]) if (x.kind === "cohost" && x.userId === u.id) endCallById(x.id, "");
+        c = { kind: "cohost", name: sanitize(u.name, 40) || "Co-host", userId: u.id };
+        Object.assign(c, { id: rid(6), key: rid(12), state: "waiting", ws, since: Date.now(), goneAt: 0 });
+        calls.set(c.id, c); ws.callId = c.id;
+        ws.staff = ws.staff || { name: u.name, role: u.role }; ws.staffId = u.id;
+        sendTo(ws, { type: "call-session", callId: c.id, key: c.key });
+        const err = putOnLine(c);   // answering puts them straight on air
+        if (err) endCallById(c.id, err);
+        return;
+      } else {
+        if ([...calls.values()].filter((x) => x.state === "waiting").length >= MAX_WAITING)
+          return sendTo(ws, { type: "call-ended", reason: "The lines are busy. Please try again in a few minutes." });
+        c = { kind: "caller", name: sanitize(d.name, 24) || "Caller" };
+      }
+      Object.assign(c, { id: rid(6), key: rid(12), state: "waiting", ws, since: Date.now(), goneAt: 0 });
+      calls.set(c.id, c); ws.callId = c.id;
+      sendTo(ws, { type: "call-session", callId: c.id, key: c.key });
+      pushStudio();
       return;
     }
-    if (d.type === "call-cancel") {
-      if (ws.callState === "waiting") { ws.callState = null; sendTo(ws, { type: "call-status", state: "idle" }); pushCallQueue(); }
+    // Reconnect to a call in progress (the audio kept flowing meanwhile).
+    if (d.type === "call-resume") {
+      const c = calls.get(String(d.callId || ""));
+      if (!c || c.key !== String(d.key || "")) return sendTo(ws, { type: "call-ended", reason: "That call has ended." });
+      if (c.ws && c.ws !== ws && c.ws.callId === c.id) c.ws.callId = null;
+      c.ws = ws; c.goneAt = 0; ws.callId = c.id;
+      sendTo(ws, { type: "call-status", state: c.state, hostOnline: !!studio, host: studio && studio.name });
+      pushStudio();
       return;
     }
     if (d.type === "call-accept") {
-      if (!ws.staff || ws.peer) return;                       // staff only, one call at a time
-      let target = null;
-      for (const c of wss.clients) if (c.id === String(d.id) && c.callState === "waiting" && c.readyState === 1) target = c;
-      if (!target) { sendTo(ws, { type: "call-gone" }); pushCallQueue(); return; }
-      ws.peer = target; target.peer = ws;
-      ws.callState = target.callState = "live";
-      sendTo(target, { type: "call-accepted", host: ws.staff.name });
-      sendTo(ws, { type: "call-live", id: target.id, name: target.callName });
-      pushCallQueue();
+      const c = calls.get(String(d.id || ""));
+      if (!canPutThrough(ws)) return sendTo(ws, { type: "studio-error", error: "Only the host or a co-host on air can put callers through." });
+      if (!c || c.state !== "waiting" || c.kind !== "caller")
+        return sendTo(ws, { type: "studio-error", error: "That person isn't waiting any more." });
+      const err = putOnLine(c);
+      if (err) sendTo(ws, { type: "studio-error", error: err });
       return;
     }
     if (d.type === "rtc") {
-      if (!ws.peer) return;
       const data = d.data;
       if (!data || typeof data !== "object" || JSON.stringify(data).length > 20000) return;
-      sendTo(ws.peer, { type: "rtc", data });
+      if (ws.isHost && isHostWs(ws) && d.to) {                // host -> a person on the line
+        const c = calls.get(String(d.to));
+        if (c && c.state === "live") sendTo(c.ws, { type: "rtc", data });
+      } else if (ws.callId) {                                  // person on the line -> host
+        const c = calls.get(ws.callId);
+        if (c && c.state === "live" && studio) sendTo(studio.ws, { type: "rtc", from: c.id, data });
+      }
       return;
     }
-    if (d.type === "call-end") {
-      if (ws.callState === "live") endCall(ws, true);
-      else if (ws.callState === "waiting") { ws.callState = null; pushCallQueue(); }
-      sendTo(ws, { type: "call-ended" });
+    if (d.type === "call-end" || d.type === "call-cancel") {
+      if (d.id) {   // staff ending/declining someone else's call
+        const c = calls.get(String(d.id));
+        if (c && (isHostWs(ws) || (c.state === "waiting" && canPutThrough(ws))))
+          endCallById(c.id, c.state === "live" ? "The presenter ended the call. Thanks for calling!" : "Sorry, the studio couldn't take your call this time.");
+      } else if (ws.callId) {
+        endCallById(ws.callId, "");   // hanging up yourself
+      }
       return;
     }
 
@@ -1156,10 +1316,13 @@ wss.on("connection", (ws) => {
     broadcast(msg);
   });
   ws.on("close", () => {
-    const wasWaiting = ws.callState === "waiting";
-    if (ws.peer) endCall(ws, true);
-    ws.callState = null;
-    if (wasWaiting) pushCallQueue();
+    // Don't end calls here: the page reconnects and resumes (see call-resume / host-start).
+    if (ws.callId) {
+      const c = calls.get(ws.callId);
+      if (c && c.ws === ws) { c.ws = null; c.goneAt = Date.now(); pushStudio(); }
+    }
+    if (studio && studio.ws === ws) { studio.ws = null; studio.goneAt = Date.now(); pushStudio(); }
+    else if (ws.staffId && ![...wss.clients].some((w) => w !== ws && isOpen(w) && w.staffId === ws.staffId)) pushStudio();   // went offline
     broadcast({ type: "presence", count: wss.clients.size });
   });
 });

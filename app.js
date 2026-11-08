@@ -19,8 +19,17 @@
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
     ));
   }
-  function timeNow() {
-    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // When the message was SENT (server timestamp), in the reader's local time.
+  // Older than today: prefix "Yesterday" or the date.
+  function msgTime(ts) {
+    const d = ts ? new Date(ts) : new Date();
+    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const day = new Date(d); day.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - day) / 86400000);
+    if (diff <= 0) return hm;
+    if (diff === 1) return "Yesterday " + hm;
+    return d.toLocaleDateString([], { day: "numeric", month: "short" }) + " " + hm;
   }
   function byId(id) { return document.getElementById(id); }
 
@@ -82,7 +91,7 @@
       if (mode === "music" && !player.paused) { try { player.pause(); } catch (_) {} }
       if (mode === "yt" && yt) { try { yt.pauseVideo(); } catch (_) {} }
       player.muted = mode === "live";
-      setStatus("⏸ Paused for the video");
+      setStatus(duckers.has("call") ? "⏸ Paused while you're on the line" : "⏸ Paused for the video");
     } else {
       player.muted = false;
       if (yt) { try { yt.unMute(); } catch (_) {} }
@@ -96,7 +105,17 @@
     }
     setButton(); setPill();
   }
-  window.RFM_RADIO = { duck(on) { if (ducked === !!on) return; ducked = !!on; applyDuck(); } };
+  // Several things can hold the radio quiet at once (a rendered video, the listener's own call).
+  const duckers = new Set();
+  window.RFM_RADIO = {
+    duck(on, who) {
+      who = who || "video";
+      if (on) duckers.add(who); else duckers.delete(who);
+      const next = duckers.size > 0;
+      if (ducked === next) return;
+      ducked = next; applyDuck();
+    },
+  };
 
   /* ---- Refresh carries on the same song where it was (saved every 3 s for this tab) ---- */
   const RESUME_KEY = "rfm_resume";
@@ -250,9 +269,9 @@
     heroPlay.classList.toggle("is-locked", playing && music);
     heroPlay.setAttribute("aria-disabled", playing && music ? "true" : "false");
     heroPlay.textContent = playing ? (music ? "♪ Music playing" : "⏸ Playing Live") : "▶ Listen Live";
-    if (ducked && intent) {   // music paused for a video: just a label, nothing to click
+    if (ducked && (intent || duckers.has("call"))) {   // paused for a video / the call: just a label
       heroPlay.classList.add("is-locked"); heroPlay.setAttribute("aria-disabled", "true");
-      heroPlay.textContent = "▶ Video playing";
+      heroPlay.textContent = duckers.has("call") ? "📞 On the line" : "▶ Video playing";
     }
   }
   function fillPoolSize() {   // how many songs/links can play right now
@@ -352,7 +371,7 @@
   setInterval(() => { if (intent && onAir === false && (mode === "music" || mode === "yt")) refreshMusic(); }, 60000);
 
   function togglePlay() {
-    if (ducked && intent) return;   // a rendered video has the sound right now
+    if (ducked) return;   // a rendered video or the listener's own call has the sound right now
     if (intent && isPlaying()) {
       if (mode === "music" || mode === "yt") return;   // fill-in music can't be paused
       intent = false; clearTimeout(retryTimer);
@@ -737,7 +756,7 @@
     }
     div.className = "msg " + (msg.mine ? "me" : "other");
     div.innerHTML =
-      `<div class="meta">${escapeHtml(msg.name)} · ${timeNow()}</div>` +
+      `<div class="meta">${escapeHtml(msg.name)} · ${msgTime(msg.ts)}</div>` +
       `<div class="body">${escapeHtml(msg.text)}</div>`;
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -786,7 +805,7 @@
     window.addEventListener("storage", (e) => {
       if (e.key === CHANNEL && e.newValue) {
         const m = JSON.parse(e.newValue);
-        addMessage({ name: m.name, text: m.text, mine: false });
+        addMessage({ name: m.name, text: m.text, ts: m.t, mine: false });
       }
     });
     return {
@@ -811,10 +830,10 @@
           // Replay the recent conversation on (re)connect.
           messagesEl.innerHTML = "";
           (d.messages || []).forEach((m) =>
-            addMessage({ name: m.name, text: m.text, mine: m.name === myName })
+            addMessage({ name: m.name, text: m.text, ts: m.ts, mine: m.name === myName })
           );
         } else if (d.type === "chat") {
-          addMessage({ name: d.name, text: d.text, mine: d.name === myName });
+          addMessage({ name: d.name, text: d.text, ts: d.ts, mine: d.name === myName });
         } else if (d.type === "cleared") {
           messagesEl.innerHTML = "";
           addMessage({ system: true, text: "Chat was cleared by the station." });

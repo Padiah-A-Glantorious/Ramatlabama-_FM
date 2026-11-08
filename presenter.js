@@ -375,12 +375,18 @@
     const chatUrl = resolveChatUrl();
     if (!chatUrl) return;
     let ws;
-    function add(name, text, system) {
+    // Time the listener SENT it (server timestamp), not when it was drawn here.
+    function when(ts) {
+      const d = ts ? new Date(ts) : new Date();
+      const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return d.toDateString() === new Date().toDateString() ? hm : d.toLocaleDateString([], { day: "numeric", month: "short" }) + " " + hm;
+    }
+    function add(name, text, system, ts) {
       const d = document.createElement("div");
       if (system) { d.className = "pres-msg system"; d.textContent = text; }
       else {
         d.className = "pres-msg";
-        d.innerHTML = `<div class="pres-msg-name">${escHtml(name)}</div><div>${escHtml(text)}</div>`;
+        d.innerHTML = `<div class="pres-msg-name">${escHtml(name)} <span class="pres-msg-time">${escHtml(when(ts))}</span></div><div>${escHtml(text)}</div>`;
       }
       feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
     }
@@ -392,10 +398,10 @@
         let d; try { d = JSON.parse(ev.data); } catch { return; }
         if (d.type === "history") {
           feed.innerHTML = "";
-          (d.messages || []).forEach((m) => add(m.name, m.text));
+          (d.messages || []).forEach((m) => add(m.name, m.text, false, m.ts));
           if (!(d.messages || []).length) add(null, "Listener requests appear here.", true);
         } else if (d.type === "chat") {
-          add(d.name, d.text);
+          add(d.name, d.text, false, d.ts);
         } else if (d.type === "cleared") {
           feed.innerHTML = "";
           add(null, "Chat cleared" + (d.by ? " by " + d.by : "") + ".", true);

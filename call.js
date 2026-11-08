@@ -1,8 +1,8 @@
 /* ============================================================
-   Ramatlabama FM — Listener "Call the studio" (WebRTC, in-browser)
-   Flow: click Call -> allow mic -> wait in queue -> presenter accepts
-         -> live audio over WebRTC -> either side hangs up.
-   The presenter's browser (portal Studio tab) is the other end.
+   Ramatlabama FM — Listener "Call the studio"
+   Click Call -> allow mic -> wait in the queue -> the host or a co-host puts
+   you through -> you're on air for as long as you like -> hang up.
+   The call itself lives in callpeer.js (reconnects, repairs, no time limit).
    ============================================================ */
 (() => {
   "use strict";
@@ -10,112 +10,77 @@
   const statusEl = document.getElementById("callStatus");
   const audio = document.getElementById("callAudio");
   if (!btn || !statusEl || !audio) return;
-
-  const cfg = window.RADIO_CONFIG || {};
-  const supported = !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  const supported = !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.RFMCallSession);
   if (!supported) { btn.hidden = true; return; }
 
-  const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
-  let iceServers = cfg.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
-  fetch("/api/ice", { cache: "no-store" }).then((r) => r.json())
-    .then((j) => { if (j && Array.isArray(j.iceServers) && j.iceServers.length) iceServers = j.iceServers; })
-    .catch(() => {});
-
-  let ws = null, pc = null, micStream = null;
-  let state = "idle";   // idle | waiting | live
+  let session = null, ui = "idle", timer = 0, since = 0;
+  // The radio stops while you're on the line: hearing the delayed stream would echo on air.
+  const radio = (on) => { try { if (window.RFM_RADIO) window.RFM_RADIO.duck(on, "call"); } catch (_) {} };
 
   function setUi(s, text) {
-    state = s;
+    ui = s;
     btn.classList.toggle("calling", s !== "idle");
     btn.textContent = s === "idle" ? "📞 Call the studio" : s === "waiting" ? "✖ Cancel call" : "⏹ Hang up";
     statusEl.textContent = text || "";
     statusEl.hidden = !text;
   }
-
-  function cleanup(text) {
-    if (pc) { try { pc.close(); } catch (_) {} pc = null; }
-    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
-    audio.srcObject = null;
-    if (ws) { try { ws.close(); } catch (_) {} ws = null; }
-    setUi("idle", text || "");
+  const clock = () => {
+    const s = Math.floor((Date.now() - since) / 1000);
+    return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  };
+  function liveText(info) {
+    const who = info.host || "the studio";
+    if (info.connected === false) return "Connecting you to " + who + "…";
+    return "🔴 On air with " + who + " · " + clock();
   }
 
-  function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
-
-  async function startCall() {
+  function start() {
     let name = (localStorage.getItem("rfm_name") || "").trim();
     if (!name) {
       name = (prompt("Your name for the presenter:") || "").trim().slice(0, 24);
       if (!name) return;
       localStorage.setItem("rfm_name", name);
     }
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-    } catch (_) {
-      setUi("idle", "Microphone blocked. Allow it in your browser to call.");
-      return;
-    }
     setUi("waiting", "Connecting…");
-    ws = new WebSocket(wsUrl);
-    ws.onopen = () => send({ type: "call-request", name });
-    ws.onmessage = (ev) => {
-      let d; try { d = JSON.parse(ev.data); } catch { return; }
-      if (d.type === "call-status" && d.state === "waiting") {
-        setUi("waiting", "You're in the queue. A presenter will pick up shortly. Keep this page open.");
-      } else if (d.type === "call-accepted") {
-        onAccepted(d.host);
-      } else if (d.type === "rtc") {
-        onRtc(d.data);
-      } else if (d.type === "call-ended") {
-        cleanup("Call ended. Thanks for calling Ramatlabama FM!");
-      }
-    };
-    ws.onclose = () => { if (state !== "idle") cleanup("Connection lost."); };
-    ws.onerror = () => { try { ws.close(); } catch (_) {} };
-  }
-
-  async function onAccepted(host) {
-    // Pause the radio, or it would leak into the call and echo on air.
-    const player = document.getElementById("player");
-    if (player && !player.paused) player.pause();
-    setUi("live", "You're live with " + (host || "the studio") + ". Use headphones and keep the radio off.");
-
-    pc = new RTCPeerConnection({ iceServers });
-    micStream.getTracks().forEach((t) => pc.addTrack(t, micStream));
-    pc.ontrack = (e) => {
-      audio.srcObject = e.streams[0]; audio.muted = false; audio.volume = 1;
-      audio.play().catch(() => {
-        // Autoplay blocked: let the caller start the sound with one tap.
-        statusEl.textContent = "Tap here to hear the presenter.";
-        statusEl.style.cursor = "pointer";
-        statusEl.onclick = () => { audio.play().then(() => { statusEl.onclick = null; statusEl.style.cursor = ""; statusEl.textContent = "You're live. Use headphones and keep the radio off."; }).catch(() => {}); };
-      });
-    };
-    pc.onicecandidate = (e) => { if (e.candidate) send({ type: "rtc", data: { candidate: e.candidate } }); };
-    pc.onconnectionstatechange = () => {
-      if (pc && (pc.connectionState === "failed")) {
-        send({ type: "call-end" });
-        cleanup("Couldn't connect the audio. Try again, or use the chat.");
-      }
-    };
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    send({ type: "rtc", data: { sdp: pc.localDescription } });
-  }
-
-  async function onRtc(data) {
-    if (!pc || !data) return;
-    try {
-      if (data.sdp) await pc.setRemoteDescription(data.sdp);
-      else if (data.candidate) await pc.addIceCandidate(data.candidate);
-    } catch (_) {}
+    session = window.RFMCallSession({
+      request: { type: "call-request", name },
+      onStatus(state, info) {
+        if (state === "waiting") {
+          setUi("waiting", info.hostOnline
+            ? "You're in the queue" + (info.position ? " (number " + info.position + ")" : "") + ". A presenter will put you through. Keep this page open."
+            : "You're in the queue. The studio will pick up when the lines open. Keep this page open.");
+        } else if (state === "live") {
+          if (ui !== "live") { since = info.since || Date.now(); radio(true); clearInterval(timer); timer = setInterval(() => { if (ui === "live") statusEl.textContent = liveText(info); }, 1000); }
+          setUi("live", liveText(info));
+        } else if (state === "reconnecting") {
+          setUi("live", "Reconnecting the line… stay on the call.");
+        }
+      },
+      onAudio(stream) {
+        audio.srcObject = stream; audio.muted = false; audio.volume = 1;
+        audio.play().catch(() => {
+          // Sound blocked until a tap: the next tap anywhere starts it.
+          const go = () => { audio.play().catch(() => {}); window.removeEventListener("pointerdown", go); };
+          window.addEventListener("pointerdown", go);
+        });
+      },
+      onEnded(reason) {
+        clearInterval(timer); timer = 0;
+        audio.srcObject = null;
+        radio(false);
+        session = null;
+        setUi("idle", reason || "Call ended. Thanks for calling Ramatlabama FM!");
+        // Short goodbye, then it's gone. A real problem (e.g. mic blocked) stays a bit longer.
+        const msg = statusEl.textContent, ms = /blocked|busy|dropped/i.test(msg) ? 6000 : 2500;
+        setTimeout(() => { if (ui === "idle" && statusEl.textContent === msg) setUi("idle", ""); }, ms);
+      },
+    });
+    session.start();
   }
 
   btn.addEventListener("click", () => {
-    if (state === "idle") startCall();
-    else { send({ type: "call-end" }); cleanup(state === "waiting" ? "Call cancelled." : "Call ended."); }
+    if (!session) start();
+    else session.hangUp();
   });
   setUi("idle", "");
 })();

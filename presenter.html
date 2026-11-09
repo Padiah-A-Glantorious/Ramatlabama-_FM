@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="presenter.css?v=25" />
+  <link rel="stylesheet" href="presenter.css?v=26" />
 </head>
 <body class="presenter-body">
 
@@ -38,6 +38,18 @@
         <button type="button" class="btn-danger" id="ringDeclineBtn">✖ Decline</button>
       </div>
     </div>
+    <!-- Meeting call: rings on every tab -->
+    <div class="ring-banner" id="meetRing" role="alertdialog" aria-live="assertive" hidden>
+      <div class="ring-text">
+        <strong id="meetRingTitle">🤝 Meeting call</strong>
+        <small>Join with your microphone. You'll see the agenda inside.</small>
+      </div>
+      <div class="live-actions">
+        <button type="button" class="btn-primary" id="meetRingJoin">✅ Join</button>
+        <button type="button" class="btn-danger" id="meetRingLater">Not now</button>
+      </div>
+    </div>
+    <div id="meetAudio" hidden></div>
     <header class="pres-topbar">
       <div class="brand">
         <span class="brand-logo"><img src="assets/logo.webp" alt="Ramatlabama FM" /></span>
@@ -60,6 +72,7 @@
       <button class="ptab manage-only" data-tab="shows" hidden>🗓 Shows</button>
       <button class="ptab manage-only" data-tab="adverts" hidden>📢 Adverts</button>
       <button class="ptab" data-tab="members">👥 Members</button>
+      <button class="ptab" data-tab="meeting" id="meetTabBtn" hidden>🤝 Meeting Room <span class="qbadge" id="meetBadge"></span></button>
       <button class="ptab" data-tab="settings">⚙ Settings</button>
     </nav>
 
@@ -342,6 +355,76 @@
         </div>
       </section>
 
+      <!-- MEETING ROOM tab (shown to members when the God Admin switches it on) -->
+      <section class="ptab-view" id="tab-meeting">
+        <div class="edit-card glass meet-admin" id="meetAdmin" hidden>
+          <div class="edit-head"><h2>🔐 Meeting Room settings (God Admin)</h2></div>
+          <label class="render-check"><input type="checkbox" id="meetEnabled" /> Show the Meeting Room tab to all members</label>
+          <p class="edit-hint">Meeting leaders can start the meeting and call everyone, put the agenda or something else on the screen, and end it. The God Admin, managers and the CEO (Elevated) always lead. Tick anyone else who should lead.</p>
+          <div class="meet-leaders" id="meetLeaders"></div>
+          <div class="save-row">
+            <button type="button" class="btn-primary" id="meetSaveLeaders">💾 Save leaders</button>
+            <span class="save-state" id="meetAdminState"></span>
+          </div>
+        </div>
+
+        <div class="edit-card glass meet-bar">
+          <div class="meet-bar-row">
+            <div>
+              <strong id="meetTitle">Meeting Room</strong>
+              <div class="save-state" id="meetStatus">Connecting…</div>
+            </div>
+            <div class="live-actions" id="meetActions">
+              <button type="button" class="btn-primary" id="meetStartBtn" hidden>📞 Start meeting &amp; call everyone</button>
+              <button type="button" class="btn-primary" id="meetJoinBtn" hidden>🎤 Join meeting</button>
+              <button type="button" class="m-btn" id="meetMuteBtn" hidden>🔇 Mute</button>
+              <button type="button" class="m-btn meet-hand-btn" id="meetHandBtn" hidden>✋ Raise hand</button>
+              <button type="button" class="btn-danger" id="meetLeaveBtn" hidden>Leave</button>
+              <button type="button" class="btn-danger" id="meetEndBtn" hidden>End meeting</button>
+            </div>
+          </div>
+          <div class="save-state" id="meetState"></div>
+        </div>
+
+        <div class="meet-grid">
+          <div class="edit-card glass meet-screen-card">
+            <div class="edit-head"><h2 id="meetScreenTitle">📄 Agenda</h2><a class="m-btn" id="meetOpenPdf" target="_blank" rel="noopener" hidden>↗ Open agenda</a></div>
+            <div class="meet-screen" id="meetScreen"><p class="edit-empty">No agenda yet.</p></div>
+          </div>
+
+          <div class="edit-card glass meet-room-card">
+            <div class="edit-head"><h2>👥 In the room <span class="meet-count" id="meetCount"></span></h2></div>
+            <div class="meet-tiles" id="meetTiles"><p class="edit-empty">Nobody is in the meeting yet.</p></div>
+          </div>
+        </div>
+
+        <div class="edit-card glass meet-controls" id="meetControls" hidden>
+          <div class="edit-head"><h2>🖥 Screen (meeting leaders)</h2></div>
+          <div class="studio-grid">
+            <div>
+              <p class="edit-hint">Upload the agenda (PDF, up to 10 MB). Everyone sees it on the screen.</p>
+              <input type="file" id="meetPdf" accept="application/pdf,.pdf" />
+              <div class="save-row">
+                <button type="button" class="btn-primary" id="meetPdfBtn">⬆ Upload agenda</button>
+                <button type="button" class="m-btn" id="meetShowAgenda">📄 Show agenda</button>
+              </div>
+            </div>
+            <div>
+              <p class="edit-hint">Or show some text on the screen.</p>
+              <input type="text" class="render-full" id="meetTxtTitle" maxlength="120" placeholder="Heading, e.g. Item 2: Weekend schedule" />
+              <textarea class="render-full" id="meetTxtBody" rows="4" maxlength="4000" placeholder="Points to discuss…"></textarea>
+              <div class="save-row"><button type="button" class="btn-primary" id="meetShowText">🖥 Show text</button></div>
+            </div>
+            <div>
+              <p class="edit-hint">Or show a picture (JPG, PNG, WEBP or GIF, up to 4 MB).</p>
+              <input type="file" id="meetImg" accept="image/png,image/jpeg,image/webp,image/gif" />
+              <div class="save-row"><button type="button" class="btn-primary" id="meetShowImg">🖼 Show picture</button></div>
+            </div>
+          </div>
+          <div class="save-state" id="meetCtlState"></div>
+        </div>
+      </section>
+
       <!-- SETTINGS tab (everyone) -->
       <section class="ptab-view" id="tab-settings">
         <div class="edit-card glass">
@@ -375,6 +458,7 @@
   <script src="studio.js?v=7"></script>
   <script src="render.js?v=4"></script>
   <script src="music.js?v=6"></script>
-  <script src="presenter.js?v=24"></script>
+  <script src="meeting.js?v=1"></script>
+  <script src="presenter.js?v=25"></script>
 </body>
 </html>

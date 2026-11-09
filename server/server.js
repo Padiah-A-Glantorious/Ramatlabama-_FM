@@ -314,6 +314,152 @@ async function youTubeInfo(link) {   // title, and an early warning if it can't 
     return { title: sanitize(j.title, 100) };
   } catch (_) { return {}; }   // YouTube unreachable: accept it anyway
 }
+/* ================= MEETING ROOM (staff audio meeting) =================
+   God Admin switches the Meeting Room tab on for all members and picks extra leaders.
+   Leaders (God Admin, Elevated users like managers/CEO, and anyone God picked) start the
+   meeting, which rings every member who has the portal open, put an agenda PDF / text /
+   picture on the shared screen, and end it. Members join with their MICROPHONE only.
+   Audio goes browser-to-browser between everyone in the room; the server only passes the
+   connection messages along and keeps the list of who's in, raised hands and mutes. */
+const MEETING_FILE = path.join(DATA_DIR, "meeting.json");
+const MEETING_DIR = path.join(DATA_DIR, "meeting");
+try { fs.mkdirSync(MEETING_DIR, { recursive: true }); } catch (_) {}
+const MEETING_PDF_MAX = 10 * 1024 * 1024;
+const MEETING_IMG_MAX = 4 * 1024 * 1024;
+const MEETING_MAX_PEOPLE = 16;
+const MEETING_EMPTY_END = 30 * 60 * 1000;   // an empty meeting ends by itself after 30 minutes
+let meeting = loadJson(MEETING_FILE, { enabled: false, leaders: [], agenda: null, screen: { kind: "agenda" } });
+if (!Array.isArray(meeting.leaders)) meeting.leaders = [];
+if (!meeting.screen || typeof meeting.screen !== "object") meeting.screen = { kind: "agenda" };
+if (meeting.agenda && !(meeting.agenda.file && fs.existsSync(path.join(MEETING_DIR, meeting.agenda.file)))) meeting.agenda = null;
+if (meeting.screen.kind === "image" && !(meeting.screen.file && fs.existsSync(path.join(MEETING_DIR, meeting.screen.file)))) meeting.screen = { kind: "agenda" };
+function saveMeeting() { try { saveJson(MEETING_FILE, meeting); } catch (_) {} }
+let meetingLive = null;           // { startedAt, by, byId, declined:Set, emptySince } while a meeting is on
+const meetPeople = new Map();     // userId -> { id, name, title, hand, handAt, muted, ws, joinedAt }
+function canLead(u) { return !!u && (u.role === "god" || u.role === "elevated" || meeting.leaders.includes(u.id)); }
+function canSeeMeeting(u) { return !!u && (u.role === "god" || meeting.enabled); }
+function meetingView(u) {
+  if (!canSeeMeeting(u)) return { type: "meeting", visible: false };
+  const god = u.role === "god";
+  const sc = meeting.screen || { kind: "agenda" };
+  return {
+    type: "meeting", visible: true, enabled: meeting.enabled, canLead: canLead(u), isGod: god, me: u.id,
+    live: meetingLive ? { startedAt: meetingLive.startedAt, by: meetingLive.by } : null,
+    people: [...meetPeople.values()].map((p) => ({
+      id: p.id, name: p.name, title: p.title, hand: p.hand, handAt: p.handAt, muted: p.muted, joinedAt: p.joinedAt,
+      lead: canLead(db.users.find((x) => x.id === p.id)),
+    })),
+    agenda: meeting.agenda ? { name: meeting.agenda.name, v: meeting.agenda.v } : null,
+    screen: { kind: sc.kind, title: sc.title || "", body: sc.body || "", v: sc.v || 0, by: sc.by || "" },
+    leaders: god ? meeting.leaders : undefined,
+    members: god ? db.users.map((x) => ({ id: x.id, name: x.name, role: x.role })) : undefined,
+    max: MEETING_MAX_PEOPLE,
+  };
+}
+function meetSockets() { return [...wss.clients].filter((w) => isOpen(w) && w.meetId); }
+function pushMeeting() {
+  for (const w of meetSockets()) {
+    const u = db.users.find((x) => x.id === w.meetId);
+    if (u) sendTo(w, meetingView(u));
+  }
+}
+function ringMeeting() {   // every member with the portal open who isn't in the room (and didn't say "not now")
+  if (!meetingLive) return;
+  for (const w of meetSockets()) {
+    const u = db.users.find((x) => x.id === w.meetId);
+    if (!u || !canSeeMeeting(u) || meetPeople.has(u.id) || meetingLive.declined.has(u.id)) continue;
+    sendTo(w, { type: "meeting-ring", by: meetingLive.by });
+  }
+}
+function meetingLeave(userId, ws) {
+  const p = meetPeople.get(userId);
+  if (!p || (ws && p.ws !== ws)) return;
+  meetPeople.delete(userId);
+  if (p.ws) p.ws.inMeeting = false;
+  for (const o of meetPeople.values()) sendTo(o.ws, { type: "meeting-peer-left", id: userId });
+  if (meetingLive && !meetPeople.size) meetingLive.emptySince = Date.now();
+  pushMeeting();
+}
+function meetingEnd(by) {
+  for (const p of meetPeople.values()) { sendTo(p.ws, { type: "meeting-ended", by }); if (p.ws) p.ws.inMeeting = false; }
+  meetPeople.clear();
+  meetingLive = null;
+  for (const w of meetSockets()) sendTo(w, { type: "meeting-ring-stop" });
+  pushMeeting();
+}
+setInterval(() => {
+  if (meetingLive && !meetPeople.size && meetingLive.emptySince && Date.now() - meetingLive.emptySince > MEETING_EMPTY_END) meetingEnd("");
+}, 60 * 1000);
+function handleMeeting(ws, u, d) {
+  const err = (e) => sendTo(ws, { type: "meeting-error", error: e });
+  if (d.type === "meeting-start") {          // start, or "call everyone again"
+    if (!canLead(u)) return err("Only a meeting leader can start the meeting.");
+    if (!meetingLive) meetingLive = { startedAt: Date.now(), by: sanitize(u.name, 40), byId: u.id, declined: new Set(), emptySince: Date.now() };
+    else meetingLive.declined.clear();
+    ringMeeting(); pushMeeting();
+    return;
+  }
+  if (d.type === "meeting-end") {
+    if (!canLead(u)) return err("Only a meeting leader can end the meeting.");
+    if (meetingLive) meetingEnd(sanitize(u.name, 40));
+    return;
+  }
+  if (d.type === "meeting-decline") { if (meetingLive) meetingLive.declined.add(u.id); return; }
+  if (d.type === "meeting-join") {
+    if (!meetingLive) return sendTo(ws, { type: "meeting-ended", by: "", reason: "There's no meeting right now." });
+    const old = meetPeople.get(u.id);
+    if (!old && meetPeople.size >= MEETING_MAX_PEOPLE) return err("The meeting is full (" + MEETING_MAX_PEOPLE + " people).");
+    if (old && old.ws !== ws) {   // same person on another device / a reconnect: the newest one wins
+      sendTo(old.ws, { type: "meeting-ended", by: "", reason: "You joined the meeting from another window." });
+      if (old.ws) old.ws.inMeeting = false;
+      meetPeople.delete(u.id);
+      for (const o of meetPeople.values()) sendTo(o.ws, { type: "meeting-peer-left", id: u.id });
+    }
+    const peers = [...meetPeople.keys()];
+    meetPeople.set(u.id, { id: u.id, name: sanitize(u.name, 40), title: sanitize(u.title, 60), hand: false, handAt: 0, muted: !!d.muted, ws, joinedAt: Date.now() });
+    ws.inMeeting = true;
+    meetingLive.declined.delete(u.id);
+    meetingLive.emptySince = 0;
+    sendTo(ws, { type: "meeting-joined", peers });   // the newcomer calls everyone already in
+    pushMeeting();
+    return;
+  }
+  const p = meetPeople.get(u.id);
+  if (!p || p.ws !== ws) return;               // the rest is for people in the room
+  if (d.type === "meeting-leave") return meetingLeave(u.id, ws);
+  if (d.type === "meeting-signal") {
+    const t = meetPeople.get(String(d.to || ""));
+    if (t && d.data && typeof d.data === "object") sendTo(t.ws, { type: "meeting-signal", from: u.id, data: d.data });
+    return;
+  }
+  if (d.type === "meeting-hand") {
+    const target = meetPeople.get(String(d.id || u.id));
+    if (!target) return;
+    if (target.id !== u.id && (d.up || !canLead(u))) return;   // leaders may only LOWER someone else's hand
+    target.hand = !!d.up; target.handAt = Date.now();
+    return pushMeeting();
+  }
+  if (d.type === "meeting-mute") { p.muted = !!d.muted; return pushMeeting(); }
+}
+function sniffImage(buf) {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf.slice(1, 4).toString("latin1") === "PNG") return ".png";
+  if (buf[0] === 0xff && buf[1] === 0xd8) return ".jpg";
+  if (buf.slice(0, 4).toString("latin1") === "RIFF" && buf.slice(8, 12).toString("latin1") === "WEBP") return ".webp";
+  if (buf.slice(0, 3).toString("latin1") === "GIF") return ".gif";
+  return null;
+}
+function removeMeetingFile(f) { if (f) { try { fs.unlinkSync(path.join(MEETING_DIR, path.basename(f))); } catch (_) {} } }
+function sendMeetingFile(res, file, type, name) {
+  const fp = path.join(MEETING_DIR, path.basename(file));
+  fs.readFile(fp, (e, data) => {
+    if (e) { res.writeHead(404); return res.end("Not found"); }
+    const h = { "Content-Type": type, "Cache-Control": "private, no-store" };
+    if (name) h["Content-Disposition"] = "inline; filename=\"" + String(name).replace(/[^\w .()-]/g, "_") + "\"";
+    res.writeHead(200, h); res.end(data);
+  });
+}
+
 /* ---- Station clock: ONE shared "now playing" for the fill-in music ----
    The server decides which song plays and when it started, so every listener hears
    the same song at the same second (like real radio) and joins mid-song. The audio
@@ -972,6 +1118,78 @@ const httpServer = http.createServer(async (req, res) => {
     });
   }
 
+  /* ---- Meeting Room ---- */
+  if (p === "/api/meeting/settings" && req.method === "POST") {   // God Admin: show the tab, pick leaders
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can change the Meeting Room." });
+    if (typeof body.enabled === "boolean") {
+      meeting.enabled = body.enabled;
+      if (!meeting.enabled && meetingLive) meetingEnd(sanitize(u.name, 40));
+    }
+    if (Array.isArray(body.leaders)) meeting.leaders = [...new Set(body.leaders.map(String))].filter((id) => db.users.some((x) => x.id === id));
+    saveMeeting(); pushMeeting();
+    return sendJson(res, 200, { ok: true, view: meetingView(u) });
+  }
+  if (p === "/api/meeting/agenda" && req.method === "POST") {     // leader uploads the agenda PDF (raw body)
+    const u = userFromToken(String(req.headers["x-token"] || ""));
+    if (!canSeeMeeting(u) || !canLead(u)) { req.resume(); return sendJson(res, 403, { ok: false, error: "Only a meeting leader can upload the agenda." }); }
+    const buf = await readRaw(req, MEETING_PDF_MAX);
+    if (!buf) return sendJson(res, 413, { ok: false, error: "The PDF is too big (max 10 MB)." });
+    if (buf.slice(0, 5).toString("latin1") !== "%PDF-") return sendJson(res, 400, { ok: false, error: "That isn't a PDF file." });
+    let name = "Agenda.pdf";
+    try { name = sanitize(decodeURIComponent(String(req.headers["x-name"] || "")), 80).trim() || name; } catch (_) {}
+    const file = "agenda-" + rid(6) + ".pdf";
+    try { fs.writeFileSync(path.join(MEETING_DIR, file), buf); } catch (_) { return sendJson(res, 500, { ok: false, error: "Could not save the PDF." }); }
+    if (meeting.agenda) removeMeetingFile(meeting.agenda.file);
+    meeting.agenda = { file, name, v: Date.now(), by: sanitize(u.name, 40) };
+    if (meeting.screen.kind === "image") removeMeetingFile(meeting.screen.file);
+    meeting.screen = { kind: "agenda", v: Date.now(), by: sanitize(u.name, 40) };
+    saveMeeting(); pushMeeting();
+    return sendJson(res, 200, { ok: true });
+  }
+  if (p === "/api/meeting/screen" && req.method === "POST") {     // leader: show the agenda, or some text
+    const body = await readBody(req);
+    const u = authUser(body);
+    if (!canSeeMeeting(u) || !canLead(u)) return sendJson(res, 403, { ok: false, error: "Only a meeting leader can change the screen." });
+    const kind = body.kind === "text" ? "text" : "agenda";
+    const next = { kind, v: Date.now(), by: sanitize(u.name, 40) };
+    if (kind === "text") {
+      next.title = sanitize(body.title, 120).trim();
+      next.body = String(body.body == null ? "" : body.body).replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "").slice(0, 4000);
+      if (!next.title && !next.body.trim()) return sendJson(res, 400, { ok: false, error: "Type something to show first." });
+    }
+    if (meeting.screen.kind === "image") removeMeetingFile(meeting.screen.file);
+    meeting.screen = next;
+    saveMeeting(); pushMeeting();
+    return sendJson(res, 200, { ok: true });
+  }
+  if (p === "/api/meeting/screen-image" && req.method === "POST") {   // leader shows a picture (raw body)
+    const u = userFromToken(String(req.headers["x-token"] || ""));
+    if (!canSeeMeeting(u) || !canLead(u)) { req.resume(); return sendJson(res, 403, { ok: false, error: "Only a meeting leader can change the screen." }); }
+    const buf = await readRaw(req, MEETING_IMG_MAX);
+    if (!buf) return sendJson(res, 413, { ok: false, error: "The picture is too big (max 4 MB)." });
+    const ext = sniffImage(buf);
+    if (!ext) return sendJson(res, 400, { ok: false, error: "Use a JPG, PNG, WEBP or GIF picture." });
+    const file = "screen-" + rid(6) + ext;
+    try { fs.writeFileSync(path.join(MEETING_DIR, file), buf); } catch (_) { return sendJson(res, 500, { ok: false, error: "Could not save the picture." }); }
+    if (meeting.screen.kind === "image") removeMeetingFile(meeting.screen.file);
+    meeting.screen = { kind: "image", file, v: Date.now(), by: sanitize(u.name, 40) };
+    saveMeeting(); pushMeeting();
+    return sendJson(res, 200, { ok: true });
+  }
+  if ((p === "/api/meeting/agenda.pdf" || p === "/api/meeting/image") && req.method === "GET") {   // members only
+    const u = userFromToken(String(url.searchParams.get("t") || ""));
+    if (!canSeeMeeting(u)) { res.writeHead(403); return res.end("Forbidden"); }
+    if (p === "/api/meeting/agenda.pdf") {
+      if (!meeting.agenda) { res.writeHead(404); return res.end("No agenda"); }
+      return sendMeetingFile(res, meeting.agenda.file, "application/pdf", meeting.agenda.name);
+    }
+    if (meeting.screen.kind !== "image") { res.writeHead(404); return res.end("No picture"); }
+    const ext = path.extname(meeting.screen.file).toLowerCase();
+    return sendMeetingFile(res, meeting.screen.file, MIME[ext] || "image/" + ext.slice(1), "");
+  }
+
   /* ---- serve an uploaded advert image from the Disk ---- */
   if (p.startsWith("/promos/") && req.method === "GET") {
     const name = path.basename(decodeURIComponent(p.slice("/promos/".length)));
@@ -1479,6 +1697,22 @@ wss.on("connection", (ws) => {
 
     if (d.type === "station-report") { stationReport(d); return; }
 
+    /* ---- Meeting Room (its own portal socket, separate from the studio) ---- */
+    if (d.type === "meeting-hello") {
+      const u = d.token ? userFromToken(String(d.token)) : null;
+      if (!u) return sendTo(ws, { type: "meeting", visible: false, auth: false });
+      ws.meetId = u.id;
+      sendTo(ws, meetingView(u));
+      if (meetingLive && canSeeMeeting(u) && !meetPeople.has(u.id) && !meetingLive.declined.has(u.id) && !d.quiet)
+        sendTo(ws, { type: "meeting-ring", by: meetingLive.by });
+      return;
+    }
+    if (typeof d.type === "string" && d.type.startsWith("meeting-")) {
+      const u = ws.meetId ? db.users.find((x) => x.id === ws.meetId) : null;
+      if (u && canSeeMeeting(u)) handleMeeting(ws, u, d);
+      return;
+    }
+
     // A listener's browser introduces itself with a private random id. We reply with a public
     // "who" hash so the page can tell which messages are its own, even after a rename.
     if (d.type === "hello") {
@@ -1509,6 +1743,7 @@ wss.on("connection", (ws) => {
     else broadcast({ type: "chat", name, text, ts, who: cid ? whoOf(cid) : "" });
   });
   ws.on("close", () => {
+    if (ws.inMeeting && ws.meetId) meetingLeave(ws.meetId, ws);   // the page rejoins by itself if it reconnects
     // Don't end calls here: the page reconnects and resumes (see call-resume / host-start).
     if (ws.callId) {
       const c = calls.get(ws.callId);

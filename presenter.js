@@ -101,6 +101,7 @@
     if (window.RFM_STUDIO) window.RFM_STUDIO.start(token);
     if (window.RFM_RENDER && me.canRender) window.RFM_RENDER.start(token);
     if (window.RFM_MUSIC) window.RFM_MUSIC.start(token, me);   // every presenter can add music
+    if (window.RFM_MEETING) window.RFM_MEETING.start(token, me);   // tab shows once God Admin switches it on
     if (isManager()) loadAdverts();
   }
 

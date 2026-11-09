@@ -1209,7 +1209,8 @@ const httpServer = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const u = authUser(body);
     if (!canSeeMeeting(u) || !canPresent(u)) return sendJson(res, 403, { ok: false, error: "Only a meeting presenter can change the screen. Ask the God Admin." });
-    const kind = body.kind === "text" ? "text" : "agenda";
+    // "none" = stop showing anything (the screen goes blank for everyone).
+    const kind = body.kind === "text" ? "text" : body.kind === "none" ? "none" : "agenda";
     const next = { kind, v: Date.now(), by: sanitize(u.name, 40) };
     if (kind === "text") {
       next.title = sanitize(body.title, 120).trim();
@@ -1457,7 +1458,12 @@ const httpServer = http.createServer(async (req, res) => {
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end("Not found"); return; }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
+    // Libraries in a versioned folder (e.g. assets/pdfjs-3.11.174) never change: let phones keep them.
+    const fixed = /^\/assets\/[a-z0-9-]+-\d+\.\d+\.\d+\//i.test(reqPath);
+    res.writeHead(200, fixed ? {
+      "Content-Type": MIME[ext] || "application/octet-stream",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    } : {
       "Content-Type": MIME[ext] || "application/octet-stream",
       "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
       "Pragma": "no-cache", "Expires": "0",

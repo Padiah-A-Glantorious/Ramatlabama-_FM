@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="presenter.css?v=29" />
+  <link rel="stylesheet" href="presenter.css?v=30" />
 </head>
 <body class="presenter-body">
 
@@ -400,8 +400,14 @@
         </div>
 
         <div class="meet-grid">
-          <div class="edit-card glass meet-screen-card">
-            <div class="edit-head"><h2 id="meetScreenTitle">📄 Agenda</h2><a class="m-btn" id="meetOpenPdf" target="_blank" rel="noopener" hidden>↗ Open agenda</a></div>
+          <div class="edit-card glass meet-screen-card" id="meetScreenCard">
+            <div class="edit-head">
+              <h2 id="meetScreenTitle">📄 Agenda</h2>
+              <div class="meet-screen-tools">
+                <a class="m-btn" id="meetOpenPdf" target="_blank" rel="noopener" hidden>↗ Open agenda</a>
+                <button type="button" class="m-btn" id="meetFullBtn" aria-pressed="false" hidden>⛶ Full screen</button>
+              </div>
+            </div>
             <div class="meet-screen" id="meetScreen"><p class="edit-empty">No agenda yet.</p></div>
           </div>
 
@@ -420,6 +426,7 @@
               <div class="save-row">
                 <button type="button" class="btn-primary" id="meetPdfBtn">⬆ Upload agenda</button>
                 <button type="button" class="m-btn" id="meetShowAgenda">📄 Show agenda</button>
+                <button type="button" class="btn-danger" id="meetStopShow">⏹ Stop showing</button>
               </div>
             </div>
             <div>
@@ -471,7 +478,7 @@
   <script src="studio.js?v=8"></script>
   <script src="render.js?v=4"></script>
   <script src="music.js?v=6"></script>
-  <script src="meeting.js?v=4"></script>
+  <script src="meeting.js?v=5"></script>
   <script src="presenter.js?v=25"></script>
 </body>
 </html>

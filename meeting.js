@@ -366,15 +366,107 @@
     });
   }
 
+  /* ---- Agenda PDF: drawn with PDF.js (served from our own site) so every page is
+     exactly as wide as the screen, on any phone. Browsers' own PDF viewers don't do that
+     (iPhones show page 1 only, many Android phones won't show it inside a page at all). */
+  const PDFJS = "assets/pdfjs-3.11.174/";
+  let pdfLib = null, pdfDoc = null, pdfSrc = "", pdfJob = 0, pdfWidth = 0;
+  function loadPdfLib() {
+    if (pdfLib) return pdfLib;
+    pdfLib = new Promise((resolve, reject) => {
+      if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js"; return resolve(window.pdfjsLib); }
+      const s = document.createElement("script");
+      s.src = PDFJS + "pdf.min.js";
+      s.onload = () => {
+        if (!window.pdfjsLib) { pdfLib = null; return reject(new Error("PDF reader missing")); }
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = () => { pdfLib = null; reject(new Error("PDF reader didn't load")); };
+      document.head.appendChild(s);
+    });
+    return pdfLib;
+  }
+  async function showPdf(box, src) {
+    const job = ++pdfJob;
+    const status = el("p", "edit-empty", "Loading the agenda…");
+    const pages = el("div", "meet-pdf-pages"); pages.id = "meetPdfPages";
+    box.append(status, pages);
+    try {
+      const lib = await loadPdfLib();
+      if (pdfSrc !== src || !pdfDoc) {
+        if (pdfDoc) { try { pdfDoc.destroy(); } catch (_) {} pdfDoc = null; }
+        pdfDoc = await lib.getDocument({ url: src }).promise;
+        pdfSrc = src;
+      }
+      if (job !== pdfJob) return;
+      status.remove();
+      await drawPages(pages, job);
+    } catch (_) {
+      if (job !== pdfJob) return;
+      status.textContent = "The agenda couldn't be shown here. Press “↗ Open agenda” to read it.";
+    }
+  }
+  async function drawPages(pages, job) {
+    const width = Math.max(200, Math.floor(pages.clientWidth || pages.parentNode.clientWidth || 600));
+    pdfWidth = width;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);   // sharp on phones, without huge memory use
+    pages.innerHTML = "";
+    for (let n = 1; n <= pdfDoc.numPages; n++) {
+      const page = await pdfDoc.getPage(n);
+      if (job !== pdfJob) return;
+      const vp = page.getViewport({ scale: width / page.getViewport({ scale: 1 }).width });   // fit the width
+      const c = document.createElement("canvas");
+      c.className = "meet-pdf-page";
+      c.width = Math.floor(vp.width * ratio); c.height = Math.floor(vp.height * ratio);
+      c.style.aspectRatio = vp.width + " / " + vp.height;
+      c.setAttribute("role", "img");
+      c.setAttribute("aria-label", "Agenda page " + n + " of " + pdfDoc.numPages);
+      pages.appendChild(c);
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null }).promise;
+    }
+  }
+  // Rotated the phone / resized the window / went full screen: redraw to the new width.
+  let resizeTimer = 0;
+  function refit() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const pages = byId("meetPdfPages");
+      if (!pages || !pdfDoc) return;
+      const w = Math.floor(pages.clientWidth);
+      if (w && Math.abs(w - pdfWidth) > 30) { const job = ++pdfJob; drawPages(pages, job).catch(() => {}); }
+    }, 250);
+  }
+  window.addEventListener("resize", refit);
+  window.addEventListener("orientationchange", refit);
+  function setFull(on) {
+    const card = byId("meetScreenCard");
+    card.classList.toggle("full", on);
+    document.body.classList.toggle("meet-full-open", on);
+    byId("meetFullBtn").textContent = on ? "✖ Close" : "⛶ Full screen";
+    byId("meetFullBtn").setAttribute("aria-pressed", on ? "true" : "false");
+    refit();
+  }
+
   function renderScreen() {
     const sc = st.screen || { kind: "agenda" };
     const key = sc.kind + "|" + sc.v + "|" + (st.agenda ? st.agenda.v : 0);
     if (key === screenKey) return;   // unchanged: don't reload the PDF
     screenKey = key;
     const box = byId("meetScreen"), open = byId("meetOpenPdf");
+    pdfJob++;                        // stop drawing an older agenda
     box.innerHTML = "";
     open.hidden = true;
+    byId("meetStopShow").disabled = sc.kind === "none";
     const by = sc.by ? " · shown by " + sc.by : "";
+    if (sc.kind === "none") {
+      byId("meetScreenTitle").textContent = "🖥 Screen";
+      box.appendChild(el("p", "edit-empty", "Nothing is being shown right now."));
+      byId("meetFullBtn").hidden = true;
+      if (byId("meetScreenCard").classList.contains("full")) setFull(false);
+      return;
+    }
+    byId("meetFullBtn").hidden = false;
     if (sc.kind === "text") {
       byId("meetScreenTitle").textContent = "🖥 Screen" + by;
       if (sc.title) box.appendChild(el("h3", "meet-text-title", sc.title));
@@ -388,9 +480,8 @@
       byId("meetScreenTitle").textContent = "📄 Agenda" + (st.agenda ? " · " + st.agenda.name : "");
       if (!st.agenda) { box.appendChild(el("p", "edit-empty", "No agenda yet." + (st.canLead ? " Upload a PDF below." : ""))); return; }
       const src = "/api/meeting/agenda.pdf?t=" + encodeURIComponent(token) + "&v=" + st.agenda.v;
-      const f = el("iframe", "meet-pdf"); f.src = src; f.title = "Meeting agenda";
-      box.appendChild(f);
-      open.href = src; open.hidden = false;   // phones often show only page 1 inline: open it fully
+      showPdf(box, src);
+      open.href = src; open.hidden = false;   // also open it in the phone's own PDF viewer (zoom, save)
     }
   }
 
@@ -489,6 +580,13 @@
       try { await upload("/api/meeting/agenda", f, { "X-Name": encodeURIComponent(f.name) }); byId("meetPdf").value = ""; say("meetCtlState", "✓ Agenda is on the screen.", true); }
       catch (e) { say("meetCtlState", e.message, false); }
     };
+    byId("meetStopShow").onclick = async () => {
+      try { await post("/api/meeting/screen", { kind: "none" }); say("meetCtlState", "✓ Stopped. The screen is blank for everyone.", true); }
+      catch (e) { say("meetCtlState", e.message, false); }
+    };
+    byId("meetFullBtn").onclick = () => setFull(!byId("meetScreenCard").classList.contains("full"));
+    byId("meetTabBtn").addEventListener("click", () => setTimeout(refit, 50));   // pages drawn while hidden had no width
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && byId("meetScreenCard").classList.contains("full")) setFull(false); });
     byId("meetShowAgenda").onclick = async () => {
       try { await post("/api/meeting/screen", { kind: "agenda" }); say("meetCtlState", "✓ Showing the agenda.", true); }
       catch (e) { say("meetCtlState", e.message, false); }

@@ -844,8 +844,12 @@ const httpServer = http.createServer(async (req, res) => {
   if (p === "/api/music/settings" && req.method === "POST") {
     const body = await readBody(req);
     const u = authUser(body);
-    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
-    if (typeof body.enabled === "boolean") music.enabled = body.enabled;
+    // Any presenter may set what plays when; switching fill-in music off is God Admin only.
+    if (!u) return sendJson(res, 403, { ok: false, error: "Log in to manage music." });
+    if (typeof body.enabled === "boolean") {
+      if (u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can switch music on or off." });
+      music.enabled = body.enabled;
+    }
     if (body.schedule && typeof body.schedule === "object") {
       const next = {};
       WEEK_DAYS.forEach((d) => { const g = cleanGenre(body.schedule[d]); if (g) next[d] = g; });

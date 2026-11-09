@@ -70,6 +70,10 @@
     if (!state) return;
     if (!draft) draft = freshDraft();
     byId("musicEnabled").checked = !!state.enabled;
+    // Everyone sees whether music is on; only the God Admin can switch it.
+    const isGod = !!me && me.role === "god";
+    byId("musicEnabled").disabled = !isGod;
+    byId("musicEnabled").title = isGod ? "" : "Only the God Admin can switch this";
 
     statusLine();
 

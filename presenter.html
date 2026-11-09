@@ -55,7 +55,7 @@
       <button class="ptab active" data-tab="chat">💬 Chat</button>
       <button class="ptab" data-tab="studio">🎙 Studio <span class="qbadge" id="queueCount"></span></button>
       <button class="ptab render-only" data-tab="render" hidden>📖 Render</button>
-      <button class="ptab god-only" data-tab="music" hidden>🎵 Music</button>
+      <button class="ptab" data-tab="music">🎵 Music</button>
       <button class="ptab" data-tab="news">📰 News</button>
       <button class="ptab manage-only" data-tab="shows" hidden>🗓 Shows</button>
       <button class="ptab manage-only" data-tab="adverts" hidden>📢 Adverts</button>
@@ -213,8 +213,8 @@
       </section>
 
       <!-- MUSIC tab (God Admin only): fill-in music while nobody is live -->
-      <section class="ptab-view god-only" id="tab-music" hidden>
-        <div class="edit-card glass render-status">
+      <section class="ptab-view" id="tab-music">
+        <div class="edit-card glass render-status god-only" hidden>
           <div class="render-status-row">
             <div>
               <strong>Fill-in music</strong>
@@ -225,7 +225,7 @@
         </div>
 
         <div class="studio-grid">
-          <div class="edit-card glass">
+          <div class="edit-card glass god-only" hidden>
             <div class="edit-head"><h2>🗓 What plays when</h2></div>
             <p class="edit-hint">South African time. Add time slots for each day (e.g. Sunday 05:00–12:00 Gospel, 12:00–18:00 Jazz). Outside a slot, the day's default genre plays. Use 00:00 as the end time to run until midnight.</p>
             <div class="music-days" id="musicDays"></div>
@@ -374,7 +374,7 @@
   <script src="callpeer.js?v=1"></script>
   <script src="studio.js?v=7"></script>
   <script src="render.js?v=4"></script>
-  <script src="music.js?v=4"></script>
-  <script src="presenter.js?v=23"></script>
+  <script src="music.js?v=5"></script>
+  <script src="presenter.js?v=24"></script>
 </body>
 </html>

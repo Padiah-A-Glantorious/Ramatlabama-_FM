@@ -1,5 +1,5 @@
 /* ============================================================
-   Ramatlabama FM — Portal "Music" tab (God Admin only)
+   Ramatlabama FM — Portal "Music" tab (everyone adds music; God Admin sets the schedule)
    Fill-in music for the website while nobody is live: uploaded songs and
    YouTube links, tagged by genre, played by time slot for each weekday.
    ============================================================ */
@@ -12,6 +12,8 @@
   ];
   const dayName = (k) => (DAYS.find((d) => d[0] === k) || [, k])[1];
   let token = null;
+  let me = null;      // the logged-in presenter
+  const canRemove = (t) => !!me && (me.role === "god" || me.role === "elevated" || (!!t.by && t.by === me.id));
   let state = null;   // last server view
   let draft = null;   // unsaved edits to { schedule, slots }
 
@@ -174,6 +176,7 @@
         };
         actions.appendChild(play);
       }
+      if (t.byName) meta.appendChild(document.createTextNode("  · added by " + t.byName));
       const del = el("button", "m-btn delete", "🗑 Delete"); del.type = "button";
       del.onclick = async () => {
         if (!confirm("Delete \"" + t.title + "\"?")) return;
@@ -182,7 +185,7 @@
           renderAll(); say("musicUploadState", "Deleted.", true);
         } catch (e) { say("musicUploadState", e.message, false); }
       };
-      actions.appendChild(del);
+      if (canRemove(t)) actions.appendChild(del);
       row.append(info, actions);
       list.appendChild(row);
     });
@@ -258,8 +261,8 @@
 
   let wired = false;
   window.RFM_MUSIC = {
-    start(tk) {
-      token = tk;
+    start(tk, user) {
+      token = tk; me = user || me;
       if (!wired) {
         wired = true;
         byId("musicSaveDays").onclick = saveDays;

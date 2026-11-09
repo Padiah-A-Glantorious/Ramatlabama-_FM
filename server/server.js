@@ -275,7 +275,9 @@ function musicAdminView() {
   return {
     ok: true, enabled: music.enabled, schedule: music.schedule, slots: music.slots,
     today: c.day, time: c.time, genreNow: c.genre, playingNow: playableGenre(c).genre,
-    genres: [...seen.values()], tracks: music.tracks.map(trackView), links: music.links.map(linkView),
+    genres: [...seen.values()],
+    tracks: music.tracks.map((t) => ({ ...trackView(t), by: t.by || "", byName: t.byName || "" })),
+    links: music.links.map((l) => ({ ...linkView(l), by: l.by || "", byName: l.byName || "" })),
     usedBytes: music.tracks.reduce((n, t) => n + (t.size || 0), 0), maxBytes: MUSIC_MAX_TOTAL,
     onAir, onAirKnown,
   };
@@ -311,6 +313,118 @@ async function youTubeInfo(link) {   // title, and an early warning if it can't 
     const j = await r.json();
     return { title: sanitize(j.title, 100) };
   } catch (_) { return {}; }   // YouTube unreachable: accept it anyway
+}
+/* ---- Station clock: ONE shared "now playing" for the fill-in music ----
+   The server decides which song plays and when it started, so every listener hears
+   the same song at the same second (like real radio) and joins mid-song. The audio
+   itself still comes from YouTube's official player in each browser (or from the
+   uploaded file). Songs play in the order they were added and loop forever. A
+   playlist plays STATION_TURN songs, then the next link gets a turn; it carries on
+   where it left off next time. Browsers tell us each song's length the first time
+   they play it, which is how the server knows when to move on. */
+const STATION_TURN = 3;
+if (!music.durs || typeof music.durs !== "object") music.durs = {};      // song key -> seconds
+if (!music.plLens || typeof music.plLens !== "object") music.plLens = {}; // playlist id -> song count
+const station = { seq: 0, item: null, startedAt: 0, turn: 0, cursors: {} };
+let musicSaveTimer = null;
+function saveMusicSoon() {
+  if (musicSaveTimer) return;
+  musicSaveTimer = setTimeout(() => { musicSaveTimer = null; saveMusic(); }, 5000);
+}
+function durKey(it) {
+  if (it.type === "file") return "f:" + it.id;
+  return it.kind === "playlist" ? "p:" + it.ytId + ":" + (it.idx || 0) : "v:" + it.ytId;
+}
+function stationPool() {   // what may play right now, in the order it was added
+  if (!music.enabled) return [];
+  const g = playableGenre(currentGenre()).genre;
+  return [
+    ...music.tracks.filter((t) => sameGenre(t.genre, g)).map((t) => ({ type: "file", ...trackView(t), ts: t.ts || 0 })),
+    ...music.links.filter((l) => sameGenre(l.genre, g)).map((l) => ({ type: "yt", ...linkView(l), ts: l.ts || 0 })),
+  ].sort((a, b) => a.ts - b.ts);
+}
+function stationStart(item, idx, at, turn) {
+  station.item = { ...item, idx: idx || 0 };
+  station.startedAt = at; station.turn = turn; station.seq++;
+}
+function stationAdvance(pool, at) {   // move on to the next song
+  const cur = station.item;
+  if (!pool.length) { if (cur) { station.item = null; station.seq++; } return; }
+  if (cur && cur.type === "yt" && cur.kind === "playlist") {
+    const n = music.plLens[cur.ytId] || 0;
+    const next = n ? (cur.idx + 1) % n : cur.idx + 1;
+    const stillHere = pool.some((x) => x.id === cur.id);
+    if (stillHere && (pool.length === 1 || station.turn < STATION_TURN)) return stationStart(cur, next, at, station.turn + 1);
+    station.cursors[cur.id] = next;   // next turn of this playlist carries on from here
+  }
+  const pos = cur ? pool.findIndex((x) => x.id === cur.id) : -1;
+  const item = pos >= 0 ? pool[(pos + 1) % pool.length] : pool[Math.floor(Math.random() * pool.length)];
+  let idx = 0;
+  if (item.type === "yt" && item.kind === "playlist") {
+    const n = music.plLens[item.ytId] || 0;
+    idx = station.cursors[item.id] || 0;
+    if (n) idx %= n;
+  }
+  stationStart(item, idx, at, 1);
+}
+function stationTick() {   // keep the clock right; returns true if the song changed
+  const before = station.seq, now = Date.now();
+  const pool = stationPool();
+  const cur = station.item;
+  if (!cur || !pool.some((x) => x.id === cur.id)) {   // nothing yet, removed, or a new time slot/genre
+    station.item = null;
+    stationAdvance(pool, now);
+    return station.seq !== before;
+  }
+  const dur = music.durs[durKey(cur)] || 0;
+  const elapsed = (now - station.startedAt) / 1000;
+  if (dur && elapsed >= dur + 1) {
+    // Seamless when someone is listening; after a long quiet gap, start the next song fresh.
+    stationAdvance(pool, elapsed > dur + 60 ? now : station.startedAt + dur * 1000);
+  } else if (!dur && elapsed > 600) {
+    station.startedAt = now;   // length still unknown (nobody played it yet): don't send people past the end
+  }
+  return station.seq !== before;
+}
+function stationView() {
+  stationTick();
+  const s = station.item;
+  if (!s) return null;
+  return {
+    seq: station.seq, id: s.id, type: s.type, kind: s.kind || "", ytId: s.ytId || "", url: s.url || "",
+    title: s.title, idx: s.idx || 0, dur: music.durs[durKey(s)] || 0,
+    offset: Math.max(0, (Date.now() - station.startedAt) / 1000),
+  };
+}
+// A listener's player reports the song's length / playlist size, or that the song ended or failed.
+function stationReport(d) {
+  const s = station.item;
+  if (!s || Number(d.seq) !== station.seq) return;   // stale report (the song already changed)
+  const key = durKey(s);
+  const dur = Number(d.dur);
+  if (!music.durs[key] && isFinite(dur) && dur >= 5 && dur <= 6 * 3600) {
+    music.durs[key] = Math.round(dur);
+    const keys = Object.keys(music.durs);
+    if (keys.length > 5000) keys.slice(0, keys.length - 5000).forEach((k) => delete music.durs[k]);
+    saveMusicSoon();
+  }
+  const n = parseInt(d.plLen, 10);
+  if (s.kind === "playlist" && n >= 1 && n <= 5000 && music.plLens[s.ytId] !== n) { music.plLens[s.ytId] = n; saveMusicSoon(); }
+  const elapsed = (Date.now() - station.startedAt) / 1000;
+  const known = music.durs[key] || 0;
+  // Only believe "ended" near the real end, and "failed" after a few seconds (stops skip-spamming).
+  const ok = (d.ended && elapsed >= (known ? known - 15 : 20)) || (d.error && elapsed >= 3);
+  if (ok) {
+    stationAdvance(stationPool(), Date.now());
+    broadcast({ type: "station", station: stationView() });
+  }
+}
+setInterval(() => { if (stationTick()) broadcast({ type: "station", station: stationView() }); }, 2000);
+
+// Any logged-in presenter may add music. Removing is limited to the person who added it,
+// the God Admin and Elevated users (older items with no owner: managers only).
+function canRemoveMusic(u, item) {
+  return !!u && (u.role === "god" || u.role === "elevated" || (!!item.by && item.by === u.id));
 }
 function cleanSlots(input) {
   const out = {};
@@ -435,6 +549,22 @@ function saveChatSoon() {
     chatSaveTimer = null;
     try { saveJson(CHAT_FILE, chatLog); } catch (_) {}
   }, 1000);
+}
+// Listeners have no accounts. Each browser makes a private random id (cid); messages keep it so a
+// later name change can update that person's older messages. Browsers only ever see a hash of it.
+function cleanCid(c) { c = String(c == null ? "" : c); return /^[A-Za-z0-9_-]{8,64}$/.test(c) ? c : ""; }
+function whoOf(cid) { return crypto.createHash("sha256").update("rfm-who:" + cid).digest("hex").slice(0, 12); }
+function renameChat(cid, name) {   // returns true if any older message had a different name
+  let changed = false;
+  chatLog.messages.forEach((m) => { if (m && m.cid === cid && m.name !== name) { m.name = name; changed = true; } });
+  if (changed) saveChatSoon();
+  return changed;
+}
+function historyPayload() {
+  return {
+    type: "history",
+    messages: chatLog.messages.map((m) => ({ name: m.name, text: m.text, ts: m.ts, who: m.cid ? whoOf(m.cid) : "" })),
+  };
 }
 function pushChat(msg) {
   chatLog.messages.push(msg);
@@ -702,13 +832,13 @@ const httpServer = http.createServer(async (req, res) => {
 
   /* ---- public: is anyone live, and what fill-in music is playing today ---- */
   if (p === "/api/music/now" && req.method === "GET") {
-    return sendJson(res, 200, { ok: true, live: onAir, known: onAirKnown, ...musicNow() });
+    return sendJson(res, 200, { ok: true, live: onAir, known: onAirKnown, ...musicNow(), station: stationView() });
   }
 
   /* ---- God Admin: fill-in music library, schedule and settings ---- */
   if (p === "/api/music/admin" && req.method === "POST") {
     const u = authUser(await readBody(req));
-    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    if (!u) return sendJson(res, 403, { ok: false, error: "Log in to manage music." });
     return sendJson(res, 200, musicAdminView());
   }
   if (p === "/api/music/settings" && req.method === "POST") {
@@ -729,7 +859,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (p === "/api/music/link" && req.method === "POST") {
     const body = await readBody(req);
     const u = authUser(body);
-    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    if (!u) return sendJson(res, 403, { ok: false, error: "Log in to add music." });
     if (music.links.length >= MUSIC_MAX_LINKS) return sendJson(res, 400, { ok: false, error: "Link limit reached. Delete some first." });
     let link = parseYouTubeLink(sanitize(body.url, 400).trim());
     if (!link) return sendJson(res, 400, { ok: false, error: "That isn't a YouTube video or playlist link." });
@@ -753,7 +883,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (music.links.some((l) => l.ytId === link.ytId && sameGenre(l.genre, genre)))
       return sendJson(res, 400, { ok: false, error: "That link is already in " + genre + "." });
     const title = sanitize(body.title, 100).trim() || info.title || (link.kind === "playlist" ? "YouTube playlist" : "YouTube video");
-    music.links.push({ id: "yt" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: link.kind, ytId: link.ytId, title, genre, ts: Date.now() });
+    music.links.push({ id: "yt" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: link.kind, ytId: link.ytId, title, genre, ts: Date.now(), by: u.id, byName: sanitize(u.name, 40) });
     saveMusic();
     broadcast({ type: "music-changed" });
     return sendJson(res, 200, { ...musicAdminView(), note });
@@ -761,15 +891,18 @@ const httpServer = http.createServer(async (req, res) => {
   if (p === "/api/music/link/delete" && req.method === "POST") {
     const body = await readBody(req);
     const u = authUser(body);
-    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    if (!u) return sendJson(res, 403, { ok: false, error: "Log in to manage music." });
+    const target = music.links.find((l) => l.id === String(body.id));
+    if (target && !canRemoveMusic(u, target)) return sendJson(res, 403, { ok: false, error: "You can only remove music you added." });
     music.links = music.links.filter((l) => l.id !== String(body.id));
     saveMusic();
+    broadcast({ type: "music-changed" });
     return sendJson(res, 200, musicAdminView());
   }
   if (p === "/api/music/upload" && req.method === "POST") {
     // Raw file body; token/genre/title travel in headers so nothing is read before auth.
     const u = userFromToken(String(req.headers["x-token"] || ""));
-    if (!u || u.role !== "god") { req.resume(); return sendJson(res, 403, { ok: false, error: "Only the God Admin can upload music." }); }
+    if (!u) { req.resume(); return sendJson(res, 403, { ok: false, error: "Log in to upload music." }); }
     if (music.tracks.length >= MUSIC_MAX_TRACKS) { req.resume(); return sendJson(res, 400, { ok: false, error: "Song limit reached. Delete some first." }); }
     let genre = "", title = "";
     try { genre = cleanGenre(decodeURIComponent(String(req.headers["x-genre"] || ""))); } catch (_) {}
@@ -785,15 +918,17 @@ const httpServer = http.createServer(async (req, res) => {
     const file = id + ext;
     try { fs.writeFileSync(path.join(MUSIC_DIR, file), buf); }
     catch (_) { return sendJson(res, 500, { ok: false, error: "Could not save the song." }); }
-    music.tracks.push({ id, file, title: title || "Untitled", genre, size: buf.length, ts: Date.now() });
+    music.tracks.push({ id, file, title: title || "Untitled", genre, size: buf.length, ts: Date.now(), by: u.id, byName: sanitize(u.name, 40) });
     saveMusic();
+    broadcast({ type: "music-changed" });
     return sendJson(res, 200, musicAdminView());
   }
   if (p === "/api/music/delete" && req.method === "POST") {
     const body = await readBody(req);
     const u = authUser(body);
-    if (!u || u.role !== "god") return sendJson(res, 403, { ok: false, error: "Only the God Admin can manage music." });
+    if (!u) return sendJson(res, 403, { ok: false, error: "Log in to manage music." });
     const t = music.tracks.find((x) => x.id === String(body.id));
+    if (t && !canRemoveMusic(u, t)) return sendJson(res, 403, { ok: false, error: "You can only remove music you added." });
     if (t) {
       try { fs.unlinkSync(path.join(MUSIC_DIR, t.file)); } catch (_) {}
       music.tracks = music.tracks.filter((x) => x.id !== t.id);
@@ -1180,7 +1315,8 @@ wss.on("connection", (ws) => {
   ws.on("pong", () => { ws.isAlive = true; });
   // Send the recent conversation so the newcomer sees what came before.
   pruneChat();
-  ws.send(JSON.stringify({ type: "history", messages: chatLog.messages }));
+  ws.send(JSON.stringify(historyPayload()));
+  ws.send(JSON.stringify({ type: "station", station: stationView() }));
   ws.send(JSON.stringify({ type: "system", text: "You joined the live chat." }));
   ws.on("message", (raw) => {
     let d; try { d = JSON.parse(raw.toString()); } catch { return; }
@@ -1337,14 +1473,36 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (d.type === "station-report") { stationReport(d); return; }
+
+    // A listener's browser introduces itself with a private random id. We reply with a public
+    // "who" hash so the page can tell which messages are its own, even after a rename.
+    if (d.type === "hello") {
+      const cid = cleanCid(d.cid);
+      if (cid) { ws.cid = cid; sendTo(ws, { type: "you", who: whoOf(cid) }); }
+      return;
+    }
+    // The listener changed their name: every earlier message of theirs shows the new name.
+    if (d.type === "rename") {
+      if (ws.staff || !ws.cid) return;
+      const name = sanitize(d.name, 24).trim();
+      if (name && renameChat(ws.cid, name)) broadcast(historyPayload());
+      return;
+    }
+
     if (d.type !== "chat") return;
     if (ws.staff) return;   // presenter sockets are read-only: no typed replies
-    const name = sanitize(d.name, 24) || "Guest";
+    const name = sanitize(d.name, 24).trim() || "Guest";
     const text = sanitize(d.text, 500);
     if (!text) return;
-    const msg = { type: "chat", name, text, ts: Date.now() };
-    pushChat({ name, text, ts: msg.ts });   // persist (without the "type" field)
-    broadcast(msg);
+    const cid = ws.cid || cleanCid(d.cid);
+    if (cid && !ws.cid) ws.cid = cid;
+    const renamed = cid ? renameChat(cid, name) : false;   // keep older messages in step with the current name
+    const ts = Date.now();
+    pushChat({ name, text, ts, cid });   // persist (without the "type" field)
+    // If older messages changed name, resend the whole log (it already includes this message).
+    if (renamed) broadcast(historyPayload());
+    else broadcast({ type: "chat", name, text, ts, who: cid ? whoOf(cid) : "" });
   });
   ws.on("close", () => {
     // Don't end calls here: the page reconnects and resumes (see call-resume / host-start).
@@ -1362,7 +1520,7 @@ wss.on("connection", (ws) => {
 setInterval(() => {
   if (pruneChat()) {
     saveChatSoon();
-    broadcast({ type: "history", messages: chatLog.messages });
+    broadcast(historyPayload());
   }
 }, 60 * 1000);
 

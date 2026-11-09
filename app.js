@@ -8,7 +8,7 @@
 
 (() => {
   "use strict";
-  console.log("%cRamatlabama FM app build v7 loaded", "color:#ff5a36;font-weight:bold");
+  console.log("%cRamatlabama FM app build v8 loaded", "color:#ff5a36;font-weight:bold");
   const cfg = window.RADIO_CONFIG || {};
 
   /* ===================================================================
@@ -69,22 +69,42 @@
   let onAir = null;         // null until the server tells us
   let switching = false;    // true while we change the <audio> source ourselves
   let musicCache = { tracks: [], links: [], genre: "", slot: "" };
-  let recent = [];          // recently played ids (avoid repeats)
+  let recent = [];          // recently played ids (own-pick fallback only)
   let nowTitle = "";
   let musicErrors = 0;
   let retryTimer = 0;
 
-  /* ---- YouTube fill-in music: audio only (the player is kept off-screen) ---- */
-  let ytApi = null, yt = null, ytItem = null, ytTimer = 0, ytShuffled = false;
+  /* ---- Station clock ----
+     The server says what the station is playing and how far into the song it is.
+     Every listener plays that same song from that same second, so opening the site,
+     logging in or pressing Play joins the song in progress instead of starting over.
+     Only if this device can't play it (e.g. YouTube blocked) does it pick its own. */
+  let station = null;       // { seq, id, type, kind, ytId, url, title, idx, dur, offset, at }
+  let stationSend = null;   // set by the chat socket
+  let following = false;    // playing the station's song (not our own pick)
+  let curKey = "";          // which item is loaded now
+  let endTimer = 0;
+  const keyOf = (it) => it.id + ":" + (it.idx || 0);
+  function setStation(st) { station = st ? { ...st, at: Date.now() } : null; }
+  function stationOffset() { return station ? station.offset + (Date.now() - station.at) / 1000 : 0; }
+  function report(extra) {
+    if (station && stationSend) stationSend({ type: "station-report", seq: station.seq, ...extra });
+  }
+  function canFollow(st) { return !!st && (st.type === "file" || (!ytBlocked && Date.now() >= ytDownUntil)); }
+
+  /* ---- YouTube fill-in music: audio only (the player is kept off-screen) ----
+     One player is kept for the whole visit and new songs are loaded into it. On iPhones
+     that matters: once you've tapped to start sound, later songs play without another tap. */
+  let ytApi = null, yt = null, ytReady = false, ytItem = null, ytTimer = 0;
   let ytBlocked = false;    // this browser won't play hidden YouTube audio: use uploaded songs instead
   let ytDownUntil = 0;      // YouTube couldn't load: skip YouTube links until this time
-  let ytVid = null, ytSongs = 0;   // songs played in the current playlist turn
-  const SONGS_PER_TURN = 3;        // then rotate to another playlist / song in the same genre
-  let curId = null;                // id of the uploaded song now playing
+  let ytNeedSync = false;   // jump to the station's position on the next PLAYING
+  let ytReported = false;   // song length already sent for this song
+  let curId = null;         // id of the uploaded song now playing
 
   /* ---- Radio goes quiet while a rendered video plays its sound (display.js calls this) ---- */
-  // Fill-in music pauses (and later carries on where it was); a live show is only
-  // muted, so the stream connection isn't dropped.
+  // Fill-in music pauses (then rejoins the station); a live show is only muted,
+  // so the stream connection isn't dropped.
   let ducked = false;
   function applyDuck() {
     if (ducked) {
@@ -95,8 +115,9 @@
     } else {
       player.muted = false;
       if (yt) { try { yt.unMute(); } catch (_) {} }
-      if (intent) {
-        if (mode === "music" && player.paused && player.getAttribute("src") && !player.ended) player.play().catch(onPlayReject);
+      if (intent && onAir !== true && (mode === "music" || mode === "yt")) {
+        if (following) { if (!nextFill()) offAirIdle(); }   // rejoin the station where it is now
+        else if (mode === "music" && player.paused && player.getAttribute("src") && !player.ended) player.play().catch(onPlayReject);
         else if (mode === "yt" && yt) { try { yt.playVideo(); } catch (_) {} }
         else if (mode === "music" && player.ended) { if (!nextFill()) offAirIdle(); }
       }
@@ -117,34 +138,6 @@
     },
   };
 
-  /* ---- Refresh carries on the same song where it was (saved every 3 s for this tab) ---- */
-  const RESUME_KEY = "rfm_resume";
-  let resumeTried = false;
-  function saveResume() {
-    try {
-      if (!intent || onAir === true) { sessionStorage.removeItem(RESUME_KEY); return; }
-      let s = null;
-      if (mode === "music" && curId && player.currentTime > 0) s = { kind: "file", id: curId, t: player.currentTime };
-      else if (mode === "yt" && ytItem && yt && yt.getCurrentTime) {
-        s = { kind: "yt", id: ytItem.id, idx: ytItem.kind === "playlist" ? (yt.getPlaylistIndex() || 0) : 0, t: yt.getCurrentTime() || 0 };
-      }
-      if (s) { s.at = Date.now(); sessionStorage.setItem(RESUME_KEY, JSON.stringify(s)); }
-    } catch (_) {}
-  }
-  setInterval(saveResume, 3000);
-  window.addEventListener("pagehide", saveResume);
-  function takeResume() {      // the song this tab was playing before the refresh, if still valid
-    if (resumeTried || (!musicCache.tracks.length && !musicCache.links.length)) return null;
-    resumeTried = true;
-    try {
-      const s = JSON.parse(sessionStorage.getItem(RESUME_KEY) || "null");
-      if (!s || Date.now() - s.at > 15 * 60000) return null;
-      const list = s.kind === "file" ? musicCache.tracks : (ytBlocked ? [] : musicCache.links);
-      const item = list.find((x) => x.id === s.id);   // gone, or not in this time slot any more
-      if (!item) return null;
-      return { item: { ...item, type: s.kind }, t: s.t + (Date.now() - s.at) / 1000, idx: s.idx || 0 };
-    } catch (_) { return null; }
-  }
   function loadYtApi() {
     if (ytApi) return ytApi;
     ytApi = new Promise((resolve, reject) => {
@@ -161,96 +154,142 @@
   }
   // Playing or buffering (3) both count as "music is on", so the button never flips back mid-song.
   function ytPlaying() { try { const s = yt && yt.getPlayerState ? yt.getPlayerState() : -1; return s === 1 || s === 3; } catch (_) { return false; } }
-  function stopYt() {
+  function parkYt() {      // stop YouTube but keep the player for the next song
     clearTimeout(ytTimer);
-    if (yt) { try { yt.destroy(); } catch (_) {} yt = null; }
     ytItem = null;
+    if (yt && ytReady) { try { yt.pauseVideo(); } catch (_) {} }
+  }
+  function destroyYt() {
+    clearTimeout(ytTimer);
+    if (yt) { try { yt.destroy(); } catch (_) {} }
+    yt = null; ytReady = false;
     const box = byId("ytMusicBox"); if (box) box.innerHTML = '<div id="ytMusicPlayer"></div>';
   }
   function showYtTitle(t) {
     nowTitle = t;
     setStatus("♪ " + t);
   }
-  function playYt(item, resume) {
+  // Where to start this item: the station's live position, or the top for our own picks.
+  function startAt(item) {
+    return following && station && keyOf(station) === keyOf(item) ? stationOffset() : 0;
+  }
+  function ytLoad(item) {  // load a song into the existing player
+    const s = Math.floor(startAt(item));
+    if (item.kind === "playlist") yt.loadPlaylist({ list: item.ytId, listType: "playlist", index: item.idx || 0, startSeconds: s });
+    else yt.loadVideoById({ videoId: item.ytId, startSeconds: s });
+  }
+  function playYt(item) {
     clearTimeout(retryTimer);
     mode = "yt";                                     // set first: the <audio> pause below is then ignored
     try { player.pause(); } catch (_) {}
     if (player.getAttribute("src")) { player.removeAttribute("src"); try { player.load(); } catch (_) {} }
-    stopYt();
-    mode = "yt"; ytItem = item; ytShuffled = !!resume; ytVid = null; ytSongs = 0;   // resuming: no random jump
-    let seekTo = resume && resume.t > 1 ? resume.t : 0;
+    ytItem = item; ytNeedSync = true; ytReported = false;
     showYtTitle(item.title);
     setButton(); setPill();
     loadYtApi().then(() => {
       if (mode !== "yt" || ytItem !== item) return;   // something else took over meanwhile
-      const vars = { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, iv_load_policy: 3 };
-      const opts = {
-        width: "100%", height: "100%", host: "https://www.youtube-nocookie.com", playerVars: vars,
-        events: {
-          onReady: (e) => {
-            try { e.target.setVolume(Math.round(player.volume * 100)); } catch (_) {}
-            if (ducked) return;   // a video is playing with sound: wait (applyDuck starts it after)
-            try { e.target.playVideo(); } catch (_) {}
-            // Phones may refuse to start without a tap: say so instead of sitting silent.
-            ytTimer = setTimeout(() => { if (mode === "yt" && ytItem === item && !ytPlaying()) armFirstInteractionAutoplay(); }, 5000);
-          },
-          onStateChange: (e) => {
-            if (mode !== "yt" || ytItem !== item) return;
-            const S = window.YT.PlayerState;
-            if (e.data === S.PLAYING) {
-              if (ducked) { try { e.target.pauseVideo(); } catch (_) {} return; }   // video has the floor
-              musicErrors = 0; intent = true;
-              if (seekTo) {   // after a refresh: jump back to where the song was
-                const at = seekTo; seekTo = 0;
-                try { if (Math.abs((e.target.getCurrentTime() || 0) - at) > 4) e.target.seekTo(at, true); } catch (_) {}
-              }
-              if (item.kind === "playlist" && !ytShuffled) {      // start the playlist at a random song
-                ytShuffled = true;
-                try {
-                  const pl = e.target.getPlaylist() || [];
-                  e.target.setShuffle(true);
-                  if (pl.length > 1) { ytVid = null; ytSongs = 0; e.target.playVideoAt(Math.floor(Math.random() * pl.length)); return; }
-                } catch (_) {}
-              }
-              const d = e.target.getVideoData ? e.target.getVideoData() : null;
-              // Rotate: after a few songs from one playlist, move on to another playlist/song.
-              const vid = d && d.video_id;
-              if (vid && vid !== ytVid) {
-                ytVid = vid; ytSongs++;
-                if (item.kind === "playlist" && ytSongs > SONGS_PER_TURN && fillPoolSize() > 1) { if (!nextFill()) offAirIdle(); return; }
-              }
-              showYtTitle((d && d.title) || item.title);
-              setButton(); setPill();
-            } else if (e.data === S.BUFFERING) {
-              setButton(); setPill();
-            } else if (e.data === S.PAUSED) {
-              // Listeners can't pause the fill-in music: carry on playing (unless a video has the floor).
-              if (intent && !ducked) { try { e.target.playVideo(); } catch (_) {} }
-            } else if (e.data === S.ENDED) {
-              if (item.kind === "playlist") {
-                try { const pl = e.target.getPlaylist() || []; if (pl.length && e.target.getPlaylistIndex() < pl.length - 1) return; } catch (_) {}
-              }
-              if (intent) { if (!nextFill()) offAirIdle(); }
-            }
-          },
-          onError: (e) => {
-            if (mode !== "yt" || ytItem !== item) return;
-            if (++musicErrors > 3) { musicErrors = 0; if (!nextFill()) offAirIdle(); return; }
-            if (item.kind === "playlist") { try { e.target.nextVideo(); return; } catch (_) {} }   // skip a blocked song
-            if (!nextFill()) offAirIdle();
-          },
-        },
-      };
-      if (item.kind === "playlist") { vars.listType = "playlist"; vars.list = item.ytId; if (resume) vars.index = resume.idx; }
-      else opts.videoId = item.ytId;
-      if (seekTo) vars.start = Math.floor(seekTo);
-      yt = new window.YT.Player("ytMusicPlayer", opts);
+      if (yt && ytReady) {
+        try { ytLoad(item); armIfSilent(item); return; } catch (_) { destroyYt(); }
+      }
+      if (yt) return;   // still being created: onReady loads the current item
+      createYt(item);
     }).catch(() => {
       if (mode !== "yt" || ytItem !== item) return;
       // YouTube unreachable for now: play uploaded songs meanwhile, and try YouTube again soon.
       ytDownUntil = Date.now() + 20000;
       if (!nextFill()) { setStatus("Loading music…"); clearTimeout(retryTimer); retryTimer = setTimeout(() => { if (intent && onAir !== true) go(); }, 5000); }
     });
+  }
+  // Phones may refuse to start without a tap: say so instead of sitting silent.
+  function armIfSilent(item) {
+    clearTimeout(ytTimer);
+    ytTimer = setTimeout(() => { if (mode === "yt" && ytItem === item && !ytPlaying()) armFirstInteractionAutoplay(); }, 5000);
+  }
+  function createYt(item) {
+    const s = Math.floor(startAt(item));
+    const vars = { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, iv_load_policy: 3 };
+    const opts = {
+      width: "100%", height: "100%", host: "https://www.youtube-nocookie.com", playerVars: vars,
+      events: {
+        onReady: (e) => {
+          ytReady = true;
+          try { e.target.setVolume(Math.round(player.volume * 100)); } catch (_) {}
+          if (mode !== "yt" || !ytItem) { try { e.target.pauseVideo(); } catch (_) {} return; }
+          if (ytItem !== item) { try { ytLoad(ytItem); } catch (_) {} }   // the song changed while loading
+          if (ducked) return;   // a video is playing with sound: wait (applyDuck starts it after)
+          try { e.target.playVideo(); } catch (_) {}
+          armIfSilent(ytItem);
+        },
+        onStateChange: onYtState,
+        onError: () => {
+          if (mode !== "yt" || !ytItem) return;
+          if (following) { report({ error: true }); waitForNext(6000); return; }
+          if (++musicErrors > 3) { musicErrors = 0; if (!nextFill()) offAirIdle(); return; }
+          if (!nextFill()) offAirIdle();
+        },
+      },
+    };
+    if (item.kind === "playlist") { vars.listType = "playlist"; vars.list = item.ytId; vars.index = item.idx || 0; }
+    else opts.videoId = item.ytId;
+    if (s > 0) vars.start = s;
+    yt = new window.YT.Player("ytMusicPlayer", opts);
+  }
+  function onYtState(e) {
+    if (mode !== "yt" || !ytItem) return;
+    const S = window.YT.PlayerState;
+    if (e.data === S.PLAYING) {
+      if (ducked) { try { e.target.pauseVideo(); } catch (_) {} return; }   // video has the floor
+      musicErrors = 0; intent = true; clearTimeout(endTimer);
+      syncYt();
+      reportYt();
+      const d = e.target.getVideoData ? e.target.getVideoData() : null;
+      showYtTitle((d && d.title) || ytItem.title);
+      setButton(); setPill();
+    } else if (e.data === S.BUFFERING) {
+      setButton(); setPill();
+    } else if (e.data === S.PAUSED) {
+      // Listeners can't pause the fill-in music: carry on playing (unless a video has the floor).
+      if (intent && !ducked) { try { e.target.playVideo(); } catch (_) {} }
+    } else if (e.data === S.ENDED) {
+      onItemEnded();
+    }
+  }
+  function syncYt() {      // once per song (and after a tap): line up with the station's second
+    if (!ytNeedSync || !following || !station || station.id !== ytItem.id) return;
+    ytNeedSync = false;
+    try {
+      if (ytItem.kind === "playlist" && yt.getPlaylistIndex() !== station.idx) return;
+      const target = stationOffset(), now = yt.getCurrentTime() || 0, dur = yt.getDuration() || 0;
+      if (Math.abs(now - target) > 5 && (!dur || target < dur - 3)) yt.seekTo(target, true);
+    } catch (_) {}
+  }
+  function reportYt() {    // tell the station this song's length (and the playlist size)
+    if (ytReported || !following || !station || keyOf(station) !== curKey) return;
+    try {
+      const dur = yt.getDuration() || 0;
+      if (!dur) return;
+      ytReported = true;
+      report({ dur, plLen: ytItem.kind === "playlist" ? (yt.getPlaylist() || []).length : 0 });
+    } catch (_) {}
+  }
+  // A song finished. Station songs: tell the server and wait for the next one
+  // (with a fallback in case the message is lost). Own picks: just play another.
+  function onItemEnded() {
+    if (!intent) return;
+    if (onAir === true) { playStream(); return; }
+    if (!following) { if (!nextFill()) offAirIdle(); return; }
+    report({ ended: true });
+    waitForNext(4000);
+  }
+  function waitForNext(ms) {
+    const key = curKey;
+    clearTimeout(endTimer);
+    endTimer = setTimeout(() => {
+      refreshMusic().then(() => {
+        if (!intent || onAir === true || curKey !== key) return;   // already moved on
+        if (!nextFill()) offAirIdle();
+      });
+    }, ms);
   }
 
   function isPlaying() { return mode === "yt" ? ytPlaying() : !player.paused; }
@@ -274,31 +313,41 @@
       heroPlay.textContent = duckers.has("call") ? "📞 On the line" : "▶ Video playing";
     }
   }
-  function fillPoolSize() {   // how many songs/links can play right now
-    return musicCache.tracks.length + (ytBlocked || Date.now() < ytDownUntil ? 0 : musicCache.links.length);
-  }
   function refreshMusic() {
     return fetch("/api/music/now", { cache: "no-store" })
       .then((r) => r.json())
       .then((m) => {
         if (!m || !m.ok) return null;
-        const slotChanged = musicCache.slot && m.slot !== musicCache.slot;
         musicCache = {
           tracks: Array.isArray(m.tracks) ? m.tracks : [],
           links: Array.isArray(m.links) ? m.links : [],
           genre: m.genre || "", slot: m.slot || "",
         };
+        if ("station" in m) setStation(m.station);
         if (m.known) setOnAir(!!m.live);
-        // New time slot (e.g. Gospel -> Jazz) while a long YouTube playlist plays: move on now.
-        if (slotChanged && intent && mode === "yt" && onAir !== true) {
-          const still = ytItem && musicCache.links.some((l) => l.id === ytItem.id);
-          if (!still && !nextFill()) offAirIdle();
-        }
+        followStation();
         return m;
       })
       .catch(() => null);
   }
-  function pickItem() {
+  // The station moved on (new song, new time slot, music added/removed): follow it.
+  function followStation() {
+    if (!intent || onAir !== false || ducked || !station || !canFollow(station)) return;
+    const k = keyOf(station);
+    if (k === curKey && (mode === "music" || mode === "yt")) return;   // already on it
+    // YouTube already moved to this playlist song by itself: just carry on.
+    if (mode === "yt" && ytItem && yt && ytReady && station.type === "yt" && station.kind === "playlist" && ytItem.ytId === station.ytId) {
+      let i = -1; try { i = yt.getPlaylistIndex(); } catch (_) {}
+      if (i === station.idx) {
+        ytItem = { ...station, type: "yt" }; curKey = k; following = true;
+        ytReported = false; ytNeedSync = true; clearTimeout(endTimer);
+        syncYt(); reportYt();
+        return;
+      }
+    }
+    nextFill();
+  }
+  function pickItem() {     // own pick (only when this device can't play the station's song)
     const list = [
       ...musicCache.tracks.map((t) => ({ ...t, type: "file" })),
       ...(ytBlocked || Date.now() < ytDownUntil ? [] : musicCache.links).map((l) => ({ ...l, type: "yt" })),
@@ -317,39 +366,44 @@
     // Other failures surface through the "error" event below.
   }
   function playStream() {
-    clearTimeout(retryTimer);
-    if (mode === "yt") stopYt();
+    clearTimeout(retryTimer); clearTimeout(endTimer);
+    if (mode === "yt") parkYt();
+    following = false; curKey = "";
     if (!streamUrl) { setStatus("No stream URL set — add it in config.js"); return; }
     mode = "live"; switching = true;
     setStatus("Connecting…");
     player.src = streamUrl + (streamUrl.includes("?") ? "&" : "?") + "t=" + Date.now();   // fresh connection
     player.play().catch(onPlayReject);
   }
-  function nextFill() {      // play the next fill-in item; false when there's nothing to play
-    clearTimeout(retryTimer);
-    const r = onAir === false ? takeResume() : null;   // first song after a refresh: carry on
-    const it = r ? r.item : pickItem();
-    refreshMusic();          // keep the list fresh (new slot, new uploads/links)
-    if (!it) { if (mode === "yt") stopYt(); return false; }
-    if (r) recent.push(it.id);
-    if (it.type === "yt") { curId = null; playYt(it, r); return true; }
-    if (mode === "yt") stopYt();
-    mode = "music"; switching = true; nowTitle = it.title; curId = it.id;
-    player.src = it.url;
-    if (r && r.t > 1) {
-      const at = r.t;
-      player.addEventListener("loadedmetadata", () => {
-        if (!isFinite(player.duration)) return;
-        if (at < player.duration - 2) { try { player.currentTime = at; } catch (_) {} }
-        else setTimeout(() => { if (intent && mode === "music" && !nextFill()) offAirIdle(); }, 0);   // that song had finished
-      }, { once: true });
+  function nextFill() {      // play the station's song (or our own pick); false when there's nothing
+    clearTimeout(retryTimer); clearTimeout(endTimer);
+    let it;
+    if (canFollow(station)) { it = { ...station }; following = true; curKey = keyOf(station); }
+    else {
+      it = pickItem();
+      if (!it) { if (mode === "yt") parkYt(); following = false; curKey = ""; return false; }
+      following = false; curKey = "own:" + it.id;
     }
+    if (it.type === "yt") { curId = null; playYt(it); return true; }
+    if (mode === "yt") parkYt();
+    mode = "music"; switching = true; nowTitle = it.title; curId = it.id;
+    const at = startAt(it);
+    player.src = it.url;
+    player.addEventListener("loadedmetadata", () => {
+      if (curId !== it.id) return;
+      const dur = player.duration;
+      if (following && isFinite(dur) && !(station && station.dur)) report({ dur });
+      if (at > 1 && isFinite(dur)) {
+        if (at < dur - 2) { try { player.currentTime = at; } catch (_) {} }
+        else onItemEnded();   // the station is already past the end of this song
+      }
+    }, { once: true });
     player.play().catch(onPlayReject);
     return true;
   }
   function offAirIdle() {    // nobody live and no music: wait and try again
-    if (mode === "yt") stopYt();
-    mode = "live";
+    if (mode === "yt") parkYt();
+    mode = "live"; following = false; curKey = "";
     setStatus("We're off air right now. Back soon.");
     setButton(); setPill();
     clearTimeout(retryTimer);
@@ -367,7 +421,7 @@
     if (live && mode !== "live") { setStatus("We're live! Switching…"); playStream(); }
     else if (!live && mode === "live") { if (!nextFill()) offAirIdle(); }
   }
-  // Every minute while music plays, check for a new time slot (Gospel -> Jazz etc.).
+  // Every minute while music plays, re-check (time slots, and in case a station message was missed).
   setInterval(() => { if (intent && onAir === false && (mode === "music" || mode === "yt")) refreshMusic(); }, 60000);
 
   function togglePlay() {
@@ -375,43 +429,56 @@
     if (intent && isPlaying()) {
       if (mode === "music" || mode === "yt") return;   // fill-in music can't be paused
       intent = false; clearTimeout(retryTimer);
-      if (mode === "yt") { try { yt.pauseVideo(); } catch (_) {} } else player.pause();
+      player.pause();
       setStatus("Paused"); setButton(); setPill();
       return;
     }
     intent = true;
     if (heroPlay) heroPlay.classList.add("loading");
-    if (mode === "yt" && yt && onAir !== true) { try { yt.playVideo(); return; } catch (_) {} }
-    // Resume a paused song where it stopped; otherwise start fresh.
-    if (mode === "music" && onAir !== true && player.src && !player.ended && player.currentTime > 0) {
+    // Music already loaded (e.g. the phone blocked autoplay): start it, lined up with the station.
+    if (mode === "yt" && yt && ytReady && ytItem && onAir !== true) { ytNeedSync = true; try { yt.playVideo(); return; } catch (_) {} }
+    if (mode === "music" && onAir !== true && following && player.getAttribute("src") && !player.ended) {
+      const t = stationOffset();
+      try { if (isFinite(player.duration) && t < player.duration - 2 && Math.abs(player.currentTime - t) > 3) player.currentTime = t; } catch (_) {}
       player.play().catch(onPlayReject);
-    } else go();
+      return;
+    }
+    go();
   }
   if (heroPlay) heroPlay.addEventListener("click", togglePlay);
 
-  /* ---- Autoplay (with first-interaction fallback) ---- */
+  /* ---- Autoplay (with first-interaction fallback) ----
+     iPhones (and most browsers) won't play sound until you've touched the page.
+     So the first tap ANYWHERE starts the music, already at the station's position. */
   let armed = false;
   function armFirstInteractionAutoplay() {
     if (armed) return;
     armed = true;
     setStatus("Tap anywhere to start listening 🔊");
     setButton();
-    const evs = ["pointerdown", "keydown", "touchstart"];
+    const evs = ["pointerdown", "keydown", "touchend"];
     const kick = (e) => {
       remove(); armed = false;
       if (heroPlay && e && e.target && heroPlay.contains(e.target)) return;   // the button handles itself
       if (!intent) return;
-      if (mode === "yt" && yt) {
+      if (mode === "yt" && yt && ytReady) {
+        ytNeedSync = true;
         try { yt.playVideo(); } catch (_) {}
-        // Some phones (mostly iPhones) never play hidden YouTube audio, even after a tap.
+        // A few phones never play hidden YouTube audio, even after a tap.
         // Then use uploaded songs for this visit, if there are any.
         const item = ytItem;
         setTimeout(() => {
           if (mode !== "yt" || ytItem !== item || ytPlaying()) return;
           ytBlocked = true;
-          if (musicCache.tracks.length) nextFill();
+          if (musicCache.tracks.length || (station && station.type === "file")) nextFill();
           else setStatus("Music can't play on this device right now. We'll be live soon.");
         }, 4000);
+        return;
+      }
+      if (mode === "music" && player.getAttribute("src") && !player.ended) {
+        const t = following ? stationOffset() : 0;
+        try { if (t > 1 && isFinite(player.duration) && t < player.duration - 2) player.currentTime = t; } catch (_) {}
+        player.play().catch(onPlayReject);
         return;
       }
       go();
@@ -423,8 +490,10 @@
     if (!streamUrl) return;
     intent = true;
     setStatus("Connecting…");
-    // Learn whether we're live first, so off-air visitors go straight to music.
-    Promise.race([refreshMusic(), new Promise((r) => setTimeout(r, 2500))]).then(go);
+    // Learn whether we're live (and what the station is playing) first.
+    Promise.race([refreshMusic(), new Promise((r) => setTimeout(r, 2500))]).then(() => {
+      if (mode === null) go();   // refreshMusic may already have started the station's song
+    });
   }
   if (document.readyState !== "loading") tryAutoplay();
   else window.addEventListener("DOMContentLoaded", tryAutoplay);
@@ -435,7 +504,7 @@
     // A new song started while a video has the floor (e.g. presenter went off air): hold it.
     if (ducked && mode === "music") { try { player.pause(); } catch (_) {} return; }
     if (ducked) { player.muted = true; setButton(); setPill(); return; }
-    if (mode === "music") { musicErrors = 0; setStatus("♪ " + nowTitle); }
+    if (mode === "music") { musicErrors = 0; clearTimeout(endTimer); setStatus("♪ " + nowTitle); }
     else setStatus("● LIVE");
     setButton(); setPill();
   });
@@ -449,7 +518,7 @@
   });
   player.addEventListener("ended", () => {
     if (!intent || mode === "yt") return;
-    if (mode === "music") { if (onAir === true) playStream(); else if (!nextFill()) offAirIdle(); }
+    if (mode === "music") onItemEnded();
     else if (onAir === true) { retryTimer = setTimeout(playStream, 3000); }   // brief drop: reconnect
     else if (!nextFill()) offAirIdle();
   });
@@ -459,6 +528,7 @@
     if (mode === "yt" || !player.getAttribute("src")) return;   // we emptied it on purpose
     if (!intent) { setButton(); setPill(); return; }
     if (mode === "music") {
+      if (following) { report({ error: true }); waitForNext(6000); return; }
       // A bad file: skip it; after a few failures in a row, give up for now.
       if (++musicErrors <= 3) { setTimeout(() => { if (intent && !nextFill()) offAirIdle(); }, 1000); }
       else { musicErrors = 0; offAirIdle(); }
@@ -726,23 +796,26 @@
   const nameInput  = byId("nameInput");
   const msgInput   = byId("msgInput");
 
-  // Name is locked for the whole browser session once chosen.
-  let lockedName = localStorage.getItem("rfm_name") || null;
-
-  function applyNameLock() {
-    if (lockedName) {
-      nameInput.value = lockedName;
-      nameInput.readOnly = true;
-      nameInput.classList.add("locked");
-      nameInput.title = "Your name is locked for this session";
-      msgInput.focus();
-    } else {
-      nameInput.readOnly = false;
-      nameInput.classList.remove("locked");
-      nameInput.title = "";
-    }
+  // The name box is always editable. The last name is remembered only to pre-fill it, so
+  // a listener can change it any time (a change also updates their earlier messages).
+  let currentName = (localStorage.getItem("rfm_name") || "").trim().slice(0, 24);
+  // Private random id for this browser. The server uses it to find this listener's older
+  // messages when the name changes; other people only ever see a hash of it.
+  let cid = localStorage.getItem("rfm_cid") || "";
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(cid)) {
+    cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 12)).replace(/[^A-Za-z0-9_-]/g, "");
+    try { localStorage.setItem("rfm_cid", cid); } catch (_) {}
   }
-  applyNameLock();
+  nameInput.value = currentName;
+  nameInput.readOnly = false;
+  nameInput.title = "Your name. You can change it any time.";
+  nameInput.addEventListener("change", () => {
+    const entered = nameInput.value.trim().slice(0, 24);
+    if (!entered || entered === currentName) return;
+    currentName = entered;
+    try { localStorage.setItem("rfm_name", currentName); } catch (_) {}
+    if (backend.rename) backend.rename(currentName);
+  });
 
   // Render one message. `msg` = { name, text, mine, system }
   function addMessage(msg) {
@@ -785,16 +858,13 @@
     const text = msgInput.value.trim();
     if (!text) return;
 
-    // First message: capture and LOCK the name for the session.
-    if (!lockedName) {
-      const entered = nameInput.value.trim().slice(0, 24);
-      if (!entered) { nameInput.focus(); nameInput.placeholder = "Enter your name first"; return; }
-      lockedName = entered;
-      localStorage.setItem("rfm_name", lockedName);
-      applyNameLock();
-    }
+    // Use whatever is in the name box right now.
+    const entered = nameInput.value.trim().slice(0, 24);
+    if (!entered) { nameInput.focus(); nameInput.placeholder = "Enter your name first"; return; }
+    currentName = entered;
+    try { localStorage.setItem("rfm_name", currentName); } catch (_) {}
 
-    backend.send({ name: lockedName, text });
+    backend.send({ name: currentName, text });
     msgInput.value = "";
     msgInput.focus();
   });
@@ -818,22 +888,32 @@
 
   /* SERVER BACKEND: real-time shared chat seen by everyone. */
   function createServerBackend(url) {
-    let ws, myName = null;
+    let ws, myName = null, myWho = "", lastHistory = null;
+
+    function isMine(m) { return myWho ? m.who === myWho : (!m.who && m.name === myName); }
+    function renderHistory() {
+      messagesEl.innerHTML = "";
+      (lastHistory || []).forEach((m) => addMessage({ name: m.name, text: m.text, ts: m.ts, mine: isMine(m) }));
+    }
 
     function connect() {
       // Know our own name up front so replayed history aligns our messages right.
-      if (!myName && lockedName) myName = lockedName;
+      if (!myName && currentName) myName = currentName;
       ws = new WebSocket(url);
+      ws.addEventListener("open", () => {
+        try { ws.send(JSON.stringify({ type: "hello", cid })); } catch (_) {}
+        stationSend = (o) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(o)); } catch (_) {} };
+      });
       ws.addEventListener("message", (ev) => {
         let d; try { d = JSON.parse(ev.data); } catch { return; }
         if (d.type === "history") {
-          // Replay the recent conversation on (re)connect.
-          messagesEl.innerHTML = "";
-          (d.messages || []).forEach((m) =>
-            addMessage({ name: m.name, text: m.text, ts: m.ts, mine: m.name === myName })
-          );
+          lastHistory = d.messages || [];
+          renderHistory();
+        } else if (d.type === "you") {
+          myWho = d.who || "";
+          if (lastHistory) renderHistory();   // now we know which messages are ours
         } else if (d.type === "chat") {
-          addMessage({ name: d.name, text: d.text, ts: d.ts, mine: d.name === myName });
+          addMessage({ name: d.name, text: d.text, ts: d.ts, mine: isMine(d) });
         } else if (d.type === "cleared") {
           messagesEl.innerHTML = "";
           addMessage({ system: true, text: "Chat was cleared by the station." });
@@ -841,6 +921,9 @@
           addMessage({ system: true, text: d.text });
         } else if (d.type === "onair") {
           setOnAir(!!d.live);   // presenter went live / off air -> switch live <-> music
+        } else if (d.type === "station") {
+          setStation(d.station || null);   // the station moved on to another song
+          followStation();
         } else if (d.type === "music-changed") {
           refreshMusic();       // God Admin changed songs, links or time slots
         } else if (d.type === "display") {
@@ -856,9 +939,13 @@
     connect();
 
     return {
+      rename(name) {
+        myName = name;
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "rename", name }));
+      },
       send({ name, text }) {
         myName = name;
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "chat", name, text }));
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "chat", name, text, cid }));
         else addMessage({ system: true, text: "Not connected — message not sent." });
       },
     };

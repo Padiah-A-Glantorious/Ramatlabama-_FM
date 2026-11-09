@@ -87,7 +87,7 @@
     document.querySelectorAll(".manage-only").forEach((el) => { el.hidden = !isManager(); });
     // Render tab: God Admin always, others only when God grants it.
     document.querySelectorAll(".render-only").forEach((el) => { el.hidden = !me.canRender; });
-    // Music tab: God Admin only.
+    // Music tab: everyone can add songs; only the God Admin sees the schedule/on-off controls.
     document.querySelectorAll(".god-only").forEach((el) => { el.hidden = me.role !== "god"; });
 
     // Prefill settings
@@ -100,7 +100,7 @@
     connectChat();
     if (window.RFM_STUDIO) window.RFM_STUDIO.start(token);
     if (window.RFM_RENDER && me.canRender) window.RFM_RENDER.start(token);
-    if (window.RFM_MUSIC && me.role === "god") window.RFM_MUSIC.start(token);
+    if (window.RFM_MUSIC) window.RFM_MUSIC.start(token, me);   // every presenter can add music
     if (isManager()) loadAdverts();
   }
 

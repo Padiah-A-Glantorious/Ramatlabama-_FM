@@ -382,3 +382,4 @@ a.m-btn { text-decoration: none; display: inline-block; }
 .meet-call-one[hidden] { display: none; }
 .meet-call-one select { min-width: 200px; max-width: 100%; padding: 9px 10px; border-radius: 9px; background: rgba(44,44,48,0.9); color: var(--text); border: 1px solid var(--glass-border); font-size: 13px; }
 .update-banner { animation: none; }
+.meet-bar .live-actions .meet-vis-btn.on { background: rgba(62,207,107,0.16); border-color: rgba(62,207,107,0.55); color: #7fe0a2; }

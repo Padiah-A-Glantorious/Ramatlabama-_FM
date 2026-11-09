@@ -347,7 +347,13 @@ function saveMeeting() { try { saveJson(MEETING_FILE, meeting); } catch (_) {} }
 let meetingLive = null;           // { startedAt, by, byId, declined:Set, emptySince } while a meeting is on
 const meetPeople = new Map();     // userId -> { id, name, title, hand, handAt, muted, ws, joinedAt }
 function canLead(u) { return !!u && (u.role === "god" || u.role === "elevated" || meeting.leaders.includes(u.id)); }
-function canSeeMeeting(u) { return !!u && (u.role === "god" || meeting.enabled); }
+// Who sees the Meeting Room tab: the God Admin always; everyone once God switches it on;
+// and, even while it's switched off, anyone a leader is calling (for that call only).
+function canSeeMeeting(u) {
+  if (!u) return false;
+  if (u.role === "god" || meeting.enabled) return true;
+  return !!meetingLive && (meetingLive.byId === u.id || meetingLive.invited.has(u.id) || meetPeople.has(u.id));
+}
 // "Call everyone" makes the meeting open to all members. Calling one person makes a
 // private call: only the people a leader called (and leaders) can join it.
 function canJoinMeeting(u) { return !!meetingLive && canSeeMeeting(u) && (meetingLive.open || canLead(u) || meetingLive.invited.has(u.id)); }
@@ -421,11 +427,11 @@ function handleMeeting(ws, u, d) {
     if (!canLead(u)) return err("Only a meeting leader can call members.");
     const t = db.users.find((x) => x.id === String(d.id || ""));
     if (!t || t.id === u.id) return err("Choose someone to call.");
-    if (!canSeeMeeting(t)) return err("Switch the Meeting Room on for members first.");
     if (meetPeople.has(t.id)) return err(t.name + " is already in the meeting.");
     if (!meetingLive) meetingLive = newMeetingLive(u, false);
     meetingLive.invited.add(t.id);
     meetingLive.declined.delete(t.id);
+    pushMeeting();   // first: the Meeting Room tab appears for them (needed before it can ring)
     const socks = meetSockets().filter((w) => w.meetId === t.id);
     socks.forEach((w) => sendTo(w, { type: "meeting-ring", by: sanitize(u.name, 40), direct: true }));
     sendTo(ws, { type: "meeting-note", text: socks.length

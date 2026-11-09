@@ -275,6 +275,10 @@
     byId("meetTitle").textContent = !live ? "Meeting Room" : live.open ? "🟢 Meeting in progress" : "🔒 Private call in progress";
     say("meetStatus", statusText());
     const show = (id, on) => { byId(id).hidden = !on; };
+    // God Admin: one clear button to show/hide the Meeting Room for every member.
+    show("meetVisBtn", !!st.isGod);
+    byId("meetVisBtn").textContent = st.enabled ? "🙈 Hide from members" : "👁 Show to all members";
+    byId("meetVisBtn").classList.toggle("on", !!st.enabled);
     show("meetStartBtn", st.canLead);
     byId("meetStartBtn").textContent = !live ? "📞 Start meeting & call everyone" : live.open ? "📞 Call everyone again" : "📞 Open to everyone & call all";
     show("meetCallOne", st.canLead);
@@ -444,6 +448,14 @@
     byId("meetEnabled").onchange = async (e) => {
       try { await post("/api/meeting/settings", { enabled: e.target.checked }); say("meetAdminState", e.target.checked ? "✓ Members can now see the Meeting Room." : "✓ Meeting Room hidden from members.", true); }
       catch (err) { e.target.checked = !e.target.checked; say("meetAdminState", err.message, false); }
+    };
+    byId("meetVisBtn").onclick = async () => {
+      const next = !st.enabled;
+      if (!next && st.live && st.live.open && !confirm("Hide the Meeting Room from members? This also ends the meeting that's on now.")) return;
+      try {
+        await post("/api/meeting/settings", { enabled: next });
+        say("meetState", next ? "✓ Every member can now see the Meeting Room." : "✓ Meeting Room hidden from members.", true);
+      } catch (err) { say("meetState", err.message, false); }
     };
     byId("meetSaveLeaders").onclick = async () => {
       const wrap = byId("meetLeaders");

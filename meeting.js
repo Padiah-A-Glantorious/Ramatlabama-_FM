@@ -22,6 +22,7 @@
   let iceCache = null;
   let screenKey = "";
   let ringTimer = 0, ringCtx = null;
+  let build = null, lastTyping = 0, callWhoKey = "";
 
   const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
   function say(id, text, ok) {
@@ -46,8 +47,10 @@
     };
     ws.onmessage = (ev) => {
       let d; try { d = JSON.parse(ev.data); } catch { return; }
-      if (d.type === "meeting") { st = d; render(); }
-      else if (d.type === "meeting-ring") { if (!inCall) ring(d.by); }
+      if (d.type === "build") onBuild(d.v);
+      else if (d.type === "meeting") { st = d; render(); }
+      else if (d.type === "meeting-ring") { if (!inCall) ring(d.by, d.direct); }
+      else if (d.type === "meeting-note") say("meetState", d.text, true);
       else if (d.type === "meeting-ring-stop") stopRing();
       else if (d.type === "meeting-joined") onJoined(d.peers || []);
       else if (d.type === "meeting-peer-left") closePeer(d.id);
@@ -60,6 +63,23 @@
     };
     ws.onclose = () => setTimeout(connect, 2000);
     ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  }
+
+  /* ================= new version deployed ================= */
+  // The server sends a fingerprint of the website files. If it changes while this page is
+  // open, new code was deployed: refresh by itself when that's safe (not in a call, not
+  // hosting the studio, not typing), otherwise show a "Refresh now" banner.
+  function busyNow() {
+    return inCall || joining || Date.now() - lastTyping < 2 * 60 * 1000 ||
+      !!(window.RFM_STUDIO && window.RFM_STUDIO.busy && window.RFM_STUDIO.busy());
+  }
+  function onBuild(v) {
+    if (!v) return;
+    if (!build) { build = v; return; }
+    if (v === build) return;
+    if (!busyNow()) { location.reload(); return; }
+    byId("updateBanner").hidden = false;
+    const retry = setInterval(() => { if (!busyNow()) { clearInterval(retry); location.reload(); } }, 30000);
   }
 
   /* ================= joining & leaving ================= */
@@ -202,9 +222,11 @@
   }, 150);
 
   /* ================= ringing ================= */
-  function ring(by) {
+  function ring(by, direct) {
     if (!st || !st.visible) return;
-    byId("meetRingTitle").textContent = "🤝 " + (by ? by + " is calling a meeting" : "Meeting call");
+    byId("meetRingTitle").textContent = direct
+      ? "📞 " + (by || "A leader") + " is calling you"
+      : "🤝 " + (by ? by + " is calling a meeting" : "Meeting call");
     byId("meetRing").hidden = false;
     try { if (navigator.vibrate) navigator.vibrate([400, 200, 400]); } catch (_) {}
     clearInterval(ringTimer);
@@ -250,14 +272,14 @@
     if (st.isGod) renderAdmin();
 
     // Status + buttons
-    byId("meetTitle").textContent = live ? "🟢 Meeting in progress" : "Meeting Room";
-    say("meetStatus", live
-      ? "Started by " + live.by + " · " + clock(live.startedAt) + " · " + people.length + " in the room"
-      : (st.canLead ? "No meeting right now. Start one to call every member." : "No meeting right now. You'll get a call when one starts."));
+    byId("meetTitle").textContent = !live ? "Meeting Room" : live.open ? "🟢 Meeting in progress" : "🔒 Private call in progress";
+    say("meetStatus", statusText());
     const show = (id, on) => { byId(id).hidden = !on; };
     show("meetStartBtn", st.canLead);
-    byId("meetStartBtn").textContent = live ? "📞 Call everyone again" : "📞 Start meeting & call everyone";
-    show("meetJoinBtn", !!live && !inCall);
+    byId("meetStartBtn").textContent = !live ? "📞 Start meeting & call everyone" : live.open ? "📞 Call everyone again" : "📞 Open to everyone & call all";
+    show("meetCallOne", st.canLead);
+    if (st.canLead) renderCallWho();
+    show("meetJoinBtn", !!live && live.canJoin && !inCall);
     byId("meetJoinBtn").textContent = joining ? "Joining…" : "🎤 Join meeting";
     byId("meetJoinBtn").disabled = joining;
     show("meetMuteBtn", inCall);
@@ -273,6 +295,34 @@
     byId("meetCount").textContent = people.length ? "(" + people.length + ")" : "";
     renderTiles();
     renderScreen();
+  }
+
+  function statusText() {
+    const live = st && st.live;
+    if (!live) return st && st.canLead
+      ? "No meeting right now. Call everyone, or pick one member and press Call."
+      : "No meeting right now. You'll get a call when one starts.";
+    const n = (st.people || []).length;
+    const base = (live.open ? "Started by " : "Private call by ") + live.by + " · " + clock(live.startedAt) + " · " + n + " in the room";
+    return live.canJoin ? base : base + ". Only the people who were called can join.";
+  }
+  // Leaders: pick one member to call. ● = has the portal open now.
+  function renderCallWho() {
+    const sel = byId("meetCallWho");
+    const inRoom = new Set((st.people || []).map((p) => p.id));
+    const list = (st.members || []).filter((m) => m.id !== me.id && !inRoom.has(m.id))
+      .sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
+    const key = list.map((m) => m.id + (m.online ? "1" : "0")).join(",");
+    if (key === callWhoKey) return;   // unchanged: don't close a dropdown that's open
+    callWhoKey = key;
+    const keep = sel.value;
+    sel.innerHTML = "";
+    const first = el("option", null, list.length ? "Choose a member…" : "Everyone is in the room"); first.value = ""; sel.appendChild(first);
+    list.forEach((m) => {
+      const o = el("option", null, (m.online ? "● " : "○ ") + m.name + (m.title ? " · " + m.title : "") + (m.online ? "" : " (portal closed)"));
+      o.value = m.id; sel.appendChild(o);
+    });
+    if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
   }
 
   function renderTiles() {
@@ -367,8 +417,18 @@
     byId("meetStartBtn").onclick = () => {
       if (!st.live && !confirm("Start the meeting and call every member who has the portal open?")) return;
       send({ type: "meeting-start" });
-      say("meetState", st.live ? "Calling everyone who isn't in the room…" : "Meeting started. Join to talk.", true);
+      say("meetState", st.live ? "Calling everyone who isn't in the room…" : "Meeting started. Calling everyone…", true);
+      join();   // the leader goes straight in
     };
+    byId("meetCallBtn").onclick = () => {
+      const id = byId("meetCallWho").value;
+      if (!id) return say("meetState", "Choose who to call first.", false);
+      send({ type: "meeting-call", id });   // starts a private call if no meeting is on
+      join();                               // and puts you in it
+    };
+    // Typing anywhere in the portal holds off an automatic refresh (so edits aren't lost).
+    document.addEventListener("input", () => { lastTyping = Date.now(); }, true);
+    byId("updateNowBtn").onclick = () => location.reload();
     byId("meetEndBtn").onclick = () => { if (confirm("End the meeting for everyone?")) send({ type: "meeting-end" }); };
     byId("meetMuteBtn").onclick = () => {
       muted = !muted;
@@ -417,7 +477,7 @@
       catch (e) { say("meetCtlState", e.message, false); }
     };
     // Keep the meeting clock ticking.
-    setInterval(() => { if (st && st.visible && st.live) say("meetStatus", "Started by " + st.live.by + " · " + clock(st.live.startedAt) + " · " + (st.people || []).length + " in the room"); }, 1000);
+    setInterval(() => { if (st && st.visible && st.live) say("meetStatus", statusText()); }, 1000);
     window.addEventListener("pagehide", () => { if (inCall) send({ type: "meeting-leave" }); });
   }
 

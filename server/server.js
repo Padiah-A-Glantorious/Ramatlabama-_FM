@@ -333,18 +333,35 @@ if (!Array.isArray(meeting.leaders)) meeting.leaders = [];
 if (!meeting.screen || typeof meeting.screen !== "object") meeting.screen = { kind: "agenda" };
 if (meeting.agenda && !(meeting.agenda.file && fs.existsSync(path.join(MEETING_DIR, meeting.agenda.file)))) meeting.agenda = null;
 if (meeting.screen.kind === "image" && !(meeting.screen.file && fs.existsSync(path.join(MEETING_DIR, meeting.screen.file)))) meeting.screen = { kind: "agenda" };
+// Fingerprint of the website files. It only changes when new code is deployed, so open
+// portals can tell they're out of date (a plain restart doesn't change it).
+const SITE_BUILD = (() => {
+  const h = crypto.createHash("sha256");
+  try {
+    fs.readdirSync(SITE_DIR).filter((f) => /\.(html|js|css)$/.test(f)).sort()
+      .forEach((f) => { h.update(f); h.update(fs.readFileSync(path.join(SITE_DIR, f))); });
+  } catch (_) {}
+  return h.digest("hex").slice(0, 12);
+})();
 function saveMeeting() { try { saveJson(MEETING_FILE, meeting); } catch (_) {} }
 let meetingLive = null;           // { startedAt, by, byId, declined:Set, emptySince } while a meeting is on
 const meetPeople = new Map();     // userId -> { id, name, title, hand, handAt, muted, ws, joinedAt }
 function canLead(u) { return !!u && (u.role === "god" || u.role === "elevated" || meeting.leaders.includes(u.id)); }
 function canSeeMeeting(u) { return !!u && (u.role === "god" || meeting.enabled); }
+// "Call everyone" makes the meeting open to all members. Calling one person makes a
+// private call: only the people a leader called (and leaders) can join it.
+function canJoinMeeting(u) { return !!meetingLive && canSeeMeeting(u) && (meetingLive.open || canLead(u) || meetingLive.invited.has(u.id)); }
+function newMeetingLive(u, open) {
+  return { startedAt: Date.now(), by: sanitize(u.name, 40), byId: u.id, declined: new Set(), invited: new Set(), open, emptySince: Date.now() };
+}
+const portalOnline = () => new Set(meetSockets().map((w) => w.meetId));
 function meetingView(u) {
   if (!canSeeMeeting(u)) return { type: "meeting", visible: false };
   const god = u.role === "god";
   const sc = meeting.screen || { kind: "agenda" };
   return {
     type: "meeting", visible: true, enabled: meeting.enabled, canLead: canLead(u), isGod: god, me: u.id,
-    live: meetingLive ? { startedAt: meetingLive.startedAt, by: meetingLive.by } : null,
+    live: meetingLive ? { startedAt: meetingLive.startedAt, by: meetingLive.by, open: meetingLive.open, canJoin: canJoinMeeting(u) } : null,
     people: [...meetPeople.values()].map((p) => ({
       id: p.id, name: p.name, title: p.title, hand: p.hand, handAt: p.handAt, muted: p.muted, joinedAt: p.joinedAt,
       lead: canLead(db.users.find((x) => x.id === p.id)),
@@ -352,7 +369,8 @@ function meetingView(u) {
     agenda: meeting.agenda ? { name: meeting.agenda.name, v: meeting.agenda.v } : null,
     screen: { kind: sc.kind, title: sc.title || "", body: sc.body || "", v: sc.v || 0, by: sc.by || "" },
     leaders: god ? meeting.leaders : undefined,
-    members: god ? db.users.map((x) => ({ id: x.id, name: x.name, role: x.role })) : undefined,
+    // Leaders get the member list so they can call one person (● = portal open now).
+    members: god || canLead(u) ? (() => { const on = portalOnline(); return db.users.map((x) => ({ id: x.id, name: x.name, title: x.title || "", role: x.role, online: on.has(x.id) })); })() : undefined,
     max: MEETING_MAX_PEOPLE,
   };
 }
@@ -367,7 +385,7 @@ function ringMeeting() {   // every member with the portal open who isn't in the
   if (!meetingLive) return;
   for (const w of meetSockets()) {
     const u = db.users.find((x) => x.id === w.meetId);
-    if (!u || !canSeeMeeting(u) || meetPeople.has(u.id) || meetingLive.declined.has(u.id)) continue;
+    if (!u || !canJoinMeeting(u) || meetPeople.has(u.id) || meetingLive.declined.has(u.id)) continue;
     sendTo(w, { type: "meeting-ring", by: meetingLive.by });
   }
 }
@@ -394,9 +412,26 @@ function handleMeeting(ws, u, d) {
   const err = (e) => sendTo(ws, { type: "meeting-error", error: e });
   if (d.type === "meeting-start") {          // start, or "call everyone again"
     if (!canLead(u)) return err("Only a meeting leader can start the meeting.");
-    if (!meetingLive) meetingLive = { startedAt: Date.now(), by: sanitize(u.name, 40), byId: u.id, declined: new Set(), emptySince: Date.now() };
-    else meetingLive.declined.clear();
+    if (!meetingLive) meetingLive = newMeetingLive(u, true);
+    else { meetingLive.open = true; meetingLive.declined.clear(); }
     ringMeeting(); pushMeeting();
+    return;
+  }
+  if (d.type === "meeting-call") {           // ring ONE member (starts a private call if none is on)
+    if (!canLead(u)) return err("Only a meeting leader can call members.");
+    const t = db.users.find((x) => x.id === String(d.id || ""));
+    if (!t || t.id === u.id) return err("Choose someone to call.");
+    if (!canSeeMeeting(t)) return err("Switch the Meeting Room on for members first.");
+    if (meetPeople.has(t.id)) return err(t.name + " is already in the meeting.");
+    if (!meetingLive) meetingLive = newMeetingLive(u, false);
+    meetingLive.invited.add(t.id);
+    meetingLive.declined.delete(t.id);
+    const socks = meetSockets().filter((w) => w.meetId === t.id);
+    socks.forEach((w) => sendTo(w, { type: "meeting-ring", by: sanitize(u.name, 40), direct: true }));
+    sendTo(ws, { type: "meeting-note", text: socks.length
+      ? "📞 Calling " + t.name + "…"
+      : t.name + " doesn't have the portal open right now. They'll be able to join when they open it." });
+    pushMeeting();
     return;
   }
   if (d.type === "meeting-end") {
@@ -407,6 +442,7 @@ function handleMeeting(ws, u, d) {
   if (d.type === "meeting-decline") { if (meetingLive) meetingLive.declined.add(u.id); return; }
   if (d.type === "meeting-join") {
     if (!meetingLive) return sendTo(ws, { type: "meeting-ended", by: "", reason: "There's no meeting right now." });
+    if (!canJoinMeeting(u)) return err("This is a private call. A leader has to call you in.");
     const old = meetPeople.get(u.id);
     if (!old && meetPeople.size >= MEETING_MAX_PEOPLE) return err("The meeting is full (" + MEETING_MAX_PEOPLE + " people).");
     if (old && old.ws !== ws) {   // same person on another device / a reconnect: the newest one wins
@@ -1701,10 +1737,14 @@ wss.on("connection", (ws) => {
     if (d.type === "meeting-hello") {
       const u = d.token ? userFromToken(String(d.token)) : null;
       if (!u) return sendTo(ws, { type: "meeting", visible: false, auth: false });
+      const firstWindow = !meetSockets().some((w) => w !== ws && w.meetId === u.id);
       ws.meetId = u.id;
+      sendTo(ws, { type: "build", v: SITE_BUILD });   // the page refreshes itself after a deploy
       sendTo(ws, meetingView(u));
-      if (meetingLive && canSeeMeeting(u) && !meetPeople.has(u.id) && !meetingLive.declined.has(u.id) && !d.quiet)
-        sendTo(ws, { type: "meeting-ring", by: meetingLive.by });
+      if (meetingLive && canJoinMeeting(u) && (meetingLive.open || meetingLive.invited.has(u.id)) &&
+          !meetPeople.has(u.id) && !meetingLive.declined.has(u.id) && !d.quiet)
+        sendTo(ws, { type: "meeting-ring", by: meetingLive.by, direct: !meetingLive.open });
+      if (firstWindow) pushMeeting();   // leaders' member lists show this person as online
       return;
     }
     if (typeof d.type === "string" && d.type.startsWith("meeting-")) {
@@ -1744,6 +1784,7 @@ wss.on("connection", (ws) => {
   });
   ws.on("close", () => {
     if (ws.inMeeting && ws.meetId) meetingLeave(ws.meetId, ws);   // the page rejoins by itself if it reconnects
+    else if (ws.meetId && !meetSockets().some((w) => w !== ws && w.meetId === ws.meetId)) pushMeeting();   // went offline
     // Don't end calls here: the page reconnects and resumes (see call-resume / host-start).
     if (ws.callId) {
       const c = calls.get(ws.callId);

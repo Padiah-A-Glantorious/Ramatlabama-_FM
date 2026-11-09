@@ -377,3 +377,8 @@ a.m-btn { text-decoration: none; display: inline-block; }
 .meet-tile.muted .meet-avatar { filter: saturate(0.6) brightness(0.85); }
 .meet-tile.connecting { opacity: .6; }
 @media (prefers-reduced-motion: reduce) { .meet-tile.hand .meet-avatar { animation: none; box-shadow: 0 0 0 5px rgba(241,207,114,1), 0 0 20px 6px rgba(241,207,114,0.6); } }
+/* Meeting: call one member */
+.meet-call-one { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.meet-call-one[hidden] { display: none; }
+.meet-call-one select { min-width: 200px; max-width: 100%; padding: 9px 10px; border-radius: 9px; background: rgba(44,44,48,0.9); color: var(--text); border: 1px solid var(--glass-border); font-size: 13px; }
+.update-banner { animation: none; }

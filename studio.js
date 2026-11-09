@@ -413,5 +413,7 @@
       }
       if (!ws) connect();
     },
+    // True while this tab hosts the lines or is on air as a co-host (never auto-refresh then).
+    busy() { return !!hosting || !!co; },
   };
 })();

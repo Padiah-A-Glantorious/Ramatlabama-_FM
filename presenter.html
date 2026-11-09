@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="presenter.css?v=26" />
+  <link rel="stylesheet" href="presenter.css?v=27" />
 </head>
 <body class="presenter-body">
 
@@ -37,6 +37,14 @@
         <button type="button" class="btn-primary" id="ringAnswerBtn">✅ Answer</button>
         <button type="button" class="btn-danger" id="ringDeclineBtn">✖ Decline</button>
       </div>
+    </div>
+    <!-- A new version of the portal was deployed while this page was open -->
+    <div class="ring-banner update-banner" id="updateBanner" role="status" hidden>
+      <div class="ring-text">
+        <strong>🔄 The portal was updated</strong>
+        <small>Refresh when you're free to get the latest version.</small>
+      </div>
+      <div class="live-actions"><button type="button" class="btn-primary" id="updateNowBtn">Refresh now</button></div>
     </div>
     <!-- Meeting call: rings on every tab -->
     <div class="ring-banner" id="meetRing" role="alertdialog" aria-live="assertive" hidden>
@@ -375,6 +383,10 @@
               <div class="save-state" id="meetStatus">Connecting…</div>
             </div>
             <div class="live-actions" id="meetActions">
+              <span class="meet-call-one" id="meetCallOne" hidden>
+                <select id="meetCallWho" aria-label="Member to call"></select>
+                <button type="button" class="btn-primary" id="meetCallBtn">📞 Call</button>
+              </span>
               <button type="button" class="btn-primary" id="meetStartBtn" hidden>📞 Start meeting &amp; call everyone</button>
               <button type="button" class="btn-primary" id="meetJoinBtn" hidden>🎤 Join meeting</button>
               <button type="button" class="m-btn" id="meetMuteBtn" hidden>🔇 Mute</button>
@@ -455,10 +467,10 @@
 
   <script src="config.js?v=22"></script>
   <script src="callpeer.js?v=1"></script>
-  <script src="studio.js?v=7"></script>
+  <script src="studio.js?v=8"></script>
   <script src="render.js?v=4"></script>
   <script src="music.js?v=6"></script>
-  <script src="meeting.js?v=1"></script>
+  <script src="meeting.js?v=2"></script>
   <script src="presenter.js?v=25"></script>
 </body>
 </html>

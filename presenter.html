@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="presenter.css?v=28" />
+  <link rel="stylesheet" href="presenter.css?v=29" />
 </head>
 <body class="presenter-body">
 
@@ -368,10 +368,10 @@
         <div class="edit-card glass meet-admin" id="meetAdmin" hidden>
           <div class="edit-head"><h2>🔐 Meeting Room settings (God Admin)</h2></div>
           <label class="render-check"><input type="checkbox" id="meetEnabled" /> Show the Meeting Room tab to all members</label>
-          <p class="edit-hint">Meeting leaders can start the meeting and call everyone, put the agenda or something else on the screen, and end it. The God Admin, managers and the CEO (Elevated) always lead. Tick anyone else who should lead.</p>
+          <p class="edit-hint"><strong>Lead</strong>: can call members, and start or end the meeting. Managers and the CEO (Elevated) always lead.<br /><strong>Present</strong>: can upload the agenda and show text or pictures on the screen. Nobody else can. You can also let someone present from their name tile during a meeting.</p>
           <div class="meet-leaders" id="meetLeaders"></div>
           <div class="save-row">
-            <button type="button" class="btn-primary" id="meetSaveLeaders">💾 Save leaders</button>
+            <button type="button" class="btn-primary" id="meetSaveLeaders">💾 Save</button>
             <span class="save-state" id="meetAdminState"></span>
           </div>
         </div>
@@ -412,7 +412,7 @@
         </div>
 
         <div class="edit-card glass meet-controls" id="meetControls" hidden>
-          <div class="edit-head"><h2>🖥 Screen (meeting leaders)</h2></div>
+          <div class="edit-head"><h2>🖥 Screen (you're a presenter)</h2></div>
           <div class="studio-grid">
             <div>
               <p class="edit-hint">Upload the agenda (PDF, up to 10 MB). Everyone sees it on the screen.</p>
@@ -471,7 +471,7 @@
   <script src="studio.js?v=8"></script>
   <script src="render.js?v=4"></script>
   <script src="music.js?v=6"></script>
-  <script src="meeting.js?v=3"></script>
+  <script src="meeting.js?v=4"></script>
   <script src="presenter.js?v=25"></script>
 </body>
 </html>

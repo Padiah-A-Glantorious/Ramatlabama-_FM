@@ -294,7 +294,7 @@
     byId("meetHandBtn").classList.toggle("on", !!(mine && mine.hand));
     show("meetLeaveBtn", inCall);
     show("meetEndBtn", st.canLead && !!live);
-    byId("meetControls").hidden = !st.canLead;
+    byId("meetControls").hidden = !st.canPresent;   // only presenters can put things on the screen
 
     byId("meetCount").textContent = people.length ? "(" + people.length + ")" : "";
     renderTiles();
@@ -321,9 +321,11 @@
     callWhoKey = key;
     const keep = sel.value;
     sel.innerHTML = "";
-    const first = el("option", null, list.length ? "Choose a member…" : "Everyone is in the room"); first.value = ""; sel.appendChild(first);
+    const first = el("option", null, list.length ? "Call one person…" : "Everyone is in"); first.value = ""; sel.appendChild(first);
     list.forEach((m) => {
-      const o = el("option", null, (m.online ? "● " : "○ ") + m.name + (m.title ? " · " + m.title : "") + (m.online ? "" : " (portal closed)"));
+      // Short labels: a long option makes the list wider than a phone screen.
+      const o = el("option", null, (m.online ? "● " : "○ ") + m.name);
+      o.title = m.name + (m.title ? " · " + m.title : "") + (m.online ? " · portal open" : " · portal closed");
       o.value = m.id; sel.appendChild(o);
     });
     if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
@@ -346,7 +348,14 @@
       if (p.muted) av.appendChild(el("span", "meet-mute-badge", "🔇"));
       t.appendChild(av);
       t.appendChild(el("div", "meet-name", p.id === me.id ? p.name + " (you)" : p.name));
-      t.appendChild(el("div", "meet-sub", p.lead ? "Leader" : (p.title || "")));
+      t.appendChild(el("div", "meet-sub", p.presenter ? "Presenter" : p.lead ? "Leader" : (p.title || "")));
+      // God Admin: grant / remove presenting right here, during the meeting.
+      if (st.isGod && p.id !== me.id) {
+        const b = el("button", "m-btn meet-tile-btn" + (p.presenter ? " on" : ""), p.presenter ? "✖ Stop presenting" : "🖥 Let present");
+        b.type = "button";
+        b.onclick = (ev) => { ev.stopPropagation(); send({ type: "meeting-presenter", id: p.id, on: !p.presenter }); };
+        t.appendChild(b);
+      }
       // Leaders can lower someone else's hand once it has been answered.
       if (p.hand && st.canLead && p.id !== me.id && inCall) {
         t.title = "Lower " + p.name + "'s hand";
@@ -390,14 +399,22 @@
     const wrap = byId("meetLeaders");
     if (wrap.dataset.dirty === "1") return;   // keep unsaved ticks
     wrap.innerHTML = "";
+    // One row per member: Lead (call / start / end) and Present (agenda, text, pictures).
     (st.members || []).filter((m) => m.role !== "god").forEach((m) => {
-      const lab = el("label", "render-check");
-      const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = m.id;
-      if (m.role === "elevated") { cb.checked = true; cb.disabled = true; }
-      else cb.checked = (st.leaders || []).includes(m.id);
-      cb.onchange = () => { wrap.dataset.dirty = "1"; };
-      lab.append(cb, document.createTextNode(" " + m.name + (m.role === "elevated" ? " (Elevated: always leads)" : "")));
-      wrap.appendChild(lab);
+      const row = el("div", "meet-perm-row");
+      row.appendChild(el("span", "meet-perm-name", m.name));
+      const box = (kind, checked, disabled, label) => {
+        const lab = el("label", "meet-perm-check");
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = m.id; cb.dataset.kind = kind;
+        cb.checked = checked; cb.disabled = disabled;
+        cb.onchange = () => { wrap.dataset.dirty = "1"; };
+        lab.append(cb, document.createTextNode(" " + label));
+        return lab;
+      };
+      const elevated = m.role === "elevated";
+      row.appendChild(box("lead", elevated || (st.leaders || []).includes(m.id), elevated, elevated ? "Lead (always)" : "Lead"));
+      row.appendChild(box("present", (st.presenters || []).includes(m.id), false, "Present"));
+      wrap.appendChild(row);
     });
   }
 
@@ -459,8 +476,8 @@
     };
     byId("meetSaveLeaders").onclick = async () => {
       const wrap = byId("meetLeaders");
-      const leaders = [...wrap.querySelectorAll("input:checked:not(:disabled)")].map((c) => c.value);
-      try { await post("/api/meeting/settings", { leaders }); wrap.dataset.dirty = ""; say("meetAdminState", "✓ Leaders saved", true); }
+      const ticked = (kind) => [...wrap.querySelectorAll('input[data-kind="' + kind + '"]:checked:not(:disabled)')].map((c) => c.value);
+      try { await post("/api/meeting/settings", { leaders: ticked("lead"), presenters: ticked("present") }); wrap.dataset.dirty = ""; say("meetAdminState", "✓ Saved", true); }
       catch (err) { say("meetAdminState", err.message, false); }
     };
 

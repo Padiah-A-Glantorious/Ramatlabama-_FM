@@ -330,6 +330,7 @@ const MEETING_MAX_PEOPLE = 16;
 const MEETING_EMPTY_END = 30 * 60 * 1000;   // an empty meeting ends by itself after 30 minutes
 let meeting = loadJson(MEETING_FILE, { enabled: false, leaders: [], agenda: null, screen: { kind: "agenda" } });
 if (!Array.isArray(meeting.leaders)) meeting.leaders = [];
+if (!Array.isArray(meeting.presenters)) meeting.presenters = [];   // may put things on the screen
 if (!meeting.screen || typeof meeting.screen !== "object") meeting.screen = { kind: "agenda" };
 if (meeting.agenda && !(meeting.agenda.file && fs.existsSync(path.join(MEETING_DIR, meeting.agenda.file)))) meeting.agenda = null;
 if (meeting.screen.kind === "image" && !(meeting.screen.file && fs.existsSync(path.join(MEETING_DIR, meeting.screen.file)))) meeting.screen = { kind: "agenda" };
@@ -347,6 +348,8 @@ function saveMeeting() { try { saveJson(MEETING_FILE, meeting); } catch (_) {} }
 let meetingLive = null;           // { startedAt, by, byId, declined:Set, emptySince } while a meeting is on
 const meetPeople = new Map();     // userId -> { id, name, title, hand, handAt, muted, ws, joinedAt }
 function canLead(u) { return !!u && (u.role === "god" || u.role === "elevated" || meeting.leaders.includes(u.id)); }
+// Presenting (agenda PDF, text, pictures on the screen): God Admin, and only the people God grants it to.
+function canPresent(u) { return !!u && (u.role === "god" || meeting.presenters.includes(u.id)); }
 // Who sees the Meeting Room tab: the God Admin always; everyone once God switches it on;
 // and, even while it's switched off, anyone a leader is calling (for that call only).
 function canSeeMeeting(u) {
@@ -366,15 +369,17 @@ function meetingView(u) {
   const god = u.role === "god";
   const sc = meeting.screen || { kind: "agenda" };
   return {
-    type: "meeting", visible: true, enabled: meeting.enabled, canLead: canLead(u), isGod: god, me: u.id,
+    type: "meeting", visible: true, enabled: meeting.enabled, canLead: canLead(u), canPresent: canPresent(u), isGod: god, me: u.id,
     live: meetingLive ? { startedAt: meetingLive.startedAt, by: meetingLive.by, open: meetingLive.open, canJoin: canJoinMeeting(u) } : null,
     people: [...meetPeople.values()].map((p) => ({
       id: p.id, name: p.name, title: p.title, hand: p.hand, handAt: p.handAt, muted: p.muted, joinedAt: p.joinedAt,
       lead: canLead(db.users.find((x) => x.id === p.id)),
+      presenter: canPresent(db.users.find((x) => x.id === p.id)),
     })),
     agenda: meeting.agenda ? { name: meeting.agenda.name, v: meeting.agenda.v } : null,
     screen: { kind: sc.kind, title: sc.title || "", body: sc.body || "", v: sc.v || 0, by: sc.by || "" },
     leaders: god ? meeting.leaders : undefined,
+    presenters: god ? meeting.presenters : undefined,
     // Leaders get the member list so they can call one person (● = portal open now).
     members: god || canLead(u) ? (() => { const on = portalOnline(); return db.users.map((x) => ({ id: x.id, name: x.name, title: x.title || "", role: x.role, online: on.has(x.id) })); })() : undefined,
     max: MEETING_MAX_PEOPLE,
@@ -465,6 +470,15 @@ function handleMeeting(ws, u, d) {
     sendTo(ws, { type: "meeting-joined", peers });   // the newcomer calls everyone already in
     pushMeeting();
     return;
+  }
+  if (d.type === "meeting-presenter") {     // God Admin grants/removes presenting (from a name tile; in the call or not)
+    if (u.role !== "god") return err("Only the God Admin can make someone a presenter.");
+    const t = db.users.find((x) => x.id === String(d.id || ""));
+    if (!t || t.role === "god") return;
+    meeting.presenters = meeting.presenters.filter((id) => id !== t.id);
+    if (d.on) meeting.presenters.push(t.id);
+    saveMeeting();
+    return pushMeeting();
   }
   const p = meetPeople.get(u.id);
   if (!p || p.ws !== ws) return;               // the rest is for people in the room
@@ -1170,12 +1184,13 @@ const httpServer = http.createServer(async (req, res) => {
       if (!meeting.enabled && meetingLive) meetingEnd(sanitize(u.name, 40));
     }
     if (Array.isArray(body.leaders)) meeting.leaders = [...new Set(body.leaders.map(String))].filter((id) => db.users.some((x) => x.id === id));
+    if (Array.isArray(body.presenters)) meeting.presenters = [...new Set(body.presenters.map(String))].filter((id) => db.users.some((x) => x.id === id));
     saveMeeting(); pushMeeting();
     return sendJson(res, 200, { ok: true, view: meetingView(u) });
   }
   if (p === "/api/meeting/agenda" && req.method === "POST") {     // leader uploads the agenda PDF (raw body)
     const u = userFromToken(String(req.headers["x-token"] || ""));
-    if (!canSeeMeeting(u) || !canLead(u)) { req.resume(); return sendJson(res, 403, { ok: false, error: "Only a meeting leader can upload the agenda." }); }
+    if (!canSeeMeeting(u) || !canPresent(u)) { req.resume(); return sendJson(res, 403, { ok: false, error: "Only a meeting presenter can upload the agenda. Ask the God Admin." }); }
     const buf = await readRaw(req, MEETING_PDF_MAX);
     if (!buf) return sendJson(res, 413, { ok: false, error: "The PDF is too big (max 10 MB)." });
     if (buf.slice(0, 5).toString("latin1") !== "%PDF-") return sendJson(res, 400, { ok: false, error: "That isn't a PDF file." });
@@ -1193,7 +1208,7 @@ const httpServer = http.createServer(async (req, res) => {
   if (p === "/api/meeting/screen" && req.method === "POST") {     // leader: show the agenda, or some text
     const body = await readBody(req);
     const u = authUser(body);
-    if (!canSeeMeeting(u) || !canLead(u)) return sendJson(res, 403, { ok: false, error: "Only a meeting leader can change the screen." });
+    if (!canSeeMeeting(u) || !canPresent(u)) return sendJson(res, 403, { ok: false, error: "Only a meeting presenter can change the screen. Ask the God Admin." });
     const kind = body.kind === "text" ? "text" : "agenda";
     const next = { kind, v: Date.now(), by: sanitize(u.name, 40) };
     if (kind === "text") {
@@ -1208,7 +1223,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
   if (p === "/api/meeting/screen-image" && req.method === "POST") {   // leader shows a picture (raw body)
     const u = userFromToken(String(req.headers["x-token"] || ""));
-    if (!canSeeMeeting(u) || !canLead(u)) { req.resume(); return sendJson(res, 403, { ok: false, error: "Only a meeting leader can change the screen." }); }
+    if (!canSeeMeeting(u) || !canPresent(u)) { req.resume(); return sendJson(res, 403, { ok: false, error: "Only a meeting presenter can change the screen. Ask the God Admin." }); }
     const buf = await readRaw(req, MEETING_IMG_MAX);
     if (!buf) return sendJson(res, 413, { ok: false, error: "The picture is too big (max 4 MB)." });
     const ext = sniffImage(buf);

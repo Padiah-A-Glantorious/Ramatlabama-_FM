@@ -380,6 +380,24 @@ a.m-btn { text-decoration: none; display: inline-block; }
 /* Meeting: call one member */
 .meet-call-one { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .meet-call-one[hidden] { display: none; }
-.meet-call-one select { min-width: 200px; max-width: 100%; padding: 9px 10px; border-radius: 9px; background: rgba(44,44,48,0.9); color: var(--text); border: 1px solid var(--glass-border); font-size: 13px; }
+.meet-call-one select { width: 190px; max-width: 100%; min-width: 0; text-overflow: ellipsis; padding: 9px 10px; border-radius: 9px; background: rgba(44,44,48,0.9); color: var(--text); border: 1px solid var(--glass-border); font-size: 13px; }
 .update-banner { animation: none; }
 .meet-bar .live-actions .meet-vis-btn.on { background: rgba(62,207,107,0.16); border-color: rgba(62,207,107,0.55); color: #7fe0a2; }
+/* Meeting: phones. The call picker and buttons wrap neatly instead of pushing the page wider. */
+.meet-bar-row > div:first-child { min-width: 0; }
+@media (max-width: 640px) {
+  .meet-bar .live-actions { width: 100%; }
+  .meet-call-one { display: flex; width: 100%; flex-wrap: nowrap; }
+  .meet-call-one select { flex: 1 1 auto; width: auto; }
+  .meet-call-one .btn-primary { flex: 0 0 auto; }
+  .meet-bar .live-actions > button { flex: 1 1 auto; }
+  .meet-tiles { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+}
+/* Meeting permissions (God Admin) */
+.meet-leaders { display: flex; flex-direction: column; gap: 6px; }
+.meet-perm-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 7px 10px; border-radius: 10px; background: rgba(44,44,48,0.6); border: 1px solid var(--glass-border); }
+.meet-perm-name { flex: 1 1 140px; min-width: 0; font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
+.meet-perm-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.meet-perm-check input { accent-color: var(--accent); width: 16px; height: 16px; }
+.meet-tile-btn { margin-top: 2px; padding: 5px 8px; font-size: 11px; background: rgba(255,255,255,0.06); color: var(--muted); }
+.meet-tile-btn.on { background: rgba(212,175,55,0.2); border-color: rgba(212,175,55,0.6); color: var(--accent-2); }

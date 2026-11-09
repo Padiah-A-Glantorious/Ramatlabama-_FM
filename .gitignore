@@ -27,3 +27,6 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+# Meeting Room data (agenda PDFs / screen pictures live on the server disk, not committed)
+server/meeting.json
+server/meeting/

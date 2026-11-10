@@ -83,9 +83,12 @@
   }
 
   /* ================= joining & leaving ================= */
+  // This tab hosts the studio lines (and is shared into Miradio), or is on air as a co-host.
+  function onAirTab() { return !!(window.RFM_STUDIO && window.RFM_STUDIO.busy && window.RFM_STUDIO.busy()); }
   async function join() {
     if (inCall || joining) return;
     stopRing();
+    if (onAirTab() && !confirm("You're hosting the studio from this tab, so the meeting's voices would go ON AIR through Miradio.\n\nJoin from another device or browser instead, or close the lines first.\n\nJoin here anyway?")) return;
     if (!window.RTCPeerConnection || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
       return say("meetState", "This browser can't join calls. Use Chrome, Edge or Safari.", false);
     joining = true; render();
@@ -230,6 +233,8 @@
     byId("meetRing").hidden = false;
     try { if (navigator.vibrate) navigator.vibrate([400, 200, 400]); } catch (_) {}
     clearInterval(ringTimer);
+    // Hosting the studio: this tab's sound goes ON AIR through Miradio's TAB share, so never beep.
+    if (onAirTab()) { byId("meetRingTitle").textContent += " (silent: you're hosting the studio)"; return; }
     const beep = () => {
       try {
         ringCtx = ringCtx || new (window.AudioContext || window.webkitAudioContext)();

@@ -8,7 +8,7 @@
 
 (() => {
   "use strict";
-  console.log("%cRamatlabama FM app build v8 loaded", "color:#ff5a36;font-weight:bold");
+  console.log("%cRamatlabama FM app build v9 loaded", "color:#ff5a36;font-weight:bold");
   const cfg = window.RADIO_CONFIG || {};
 
   /* ===================================================================
@@ -424,6 +424,49 @@
   // Every minute while music plays, re-check (time slots, and in case a station message was missed).
   setInterval(() => { if (intent && onAir === false && (mode === "music" || mode === "yt")) refreshMusic(); }, 60000);
 
+  /* ---- Unlock the live player while YouTube music plays ----
+     YouTube songs play in YouTube's own player, so the site's <audio> player (the live
+     show) has never been started by a tap. Phones then refuse to start it when a presenter
+     goes live, and listeners are left in silence. On the listener's first tap anywhere we
+     play a split second of silence through it, so it's allowed to play the live show later. */
+  let audioUnlocked = false, silentUrl = "", unlocking = false;
+  // True while the silent clip (or the moment just after it) is in the player: the player's
+  // own events then mean nothing and must not change the radio's state.
+  function unlockNoise() {
+    const src = player.getAttribute("src");
+    return unlocking && (!src || src === silentUrl);
+  }
+  function silentClip() {
+    if (silentUrl) return silentUrl;
+    const n = 800, b = new Uint8Array(44 + n), v = new DataView(b.buffer);   // 0.1 s of silence, 8 kHz WAV
+    const s = (o, t) => { for (let i = 0; i < t.length; i++) b[o + i] = t.charCodeAt(i); };
+    s(0, "RIFF"); v.setUint32(4, 36 + n, true); s(8, "WAVE"); s(12, "fmt ");
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+    s(36, "data"); v.setUint32(40, n, true); b.fill(128, 44);
+    silentUrl = URL.createObjectURL(new Blob([b], { type: "audio/wav" }));
+    return silentUrl;
+  }
+  function unlockAudio() {
+    // Only needed while the <audio> player is idle (YouTube music, or nothing yet).
+    if (audioUnlocked || player.getAttribute("src")) return;
+    audioUnlocked = true; unlocking = true;
+    const clip = silentClip();
+    const tidy = () => {   // leave the player empty again, unless the live show took it meanwhile
+      if (player.getAttribute("src") !== clip) { unlocking = false; return; }
+      try { player.pause(); } catch (_) {}
+      player.removeAttribute("src"); try { player.load(); } catch (_) {}
+      setTimeout(() => { unlocking = false; }, 800);   // let the pause/emptied events pass
+    };
+    try {
+      player.src = clip;
+      const p = player.play();
+      if (p && p.then) p.then(tidy, () => { audioUnlocked = false; tidy(); }); else tidy();
+    } catch (_) { audioUnlocked = false; tidy(); }
+  }
+  ["pointerdown", "touchend", "keydown"].forEach((ev) =>
+    window.addEventListener(ev, () => { if (mode !== "live" && mode !== "music") unlockAudio(); }, { passive: true, capture: true }));
+
   function togglePlay() {
     if (ducked) return;   // a rendered video or the listener's own call has the sound right now
     if (intent && isPlaying()) {
@@ -454,7 +497,7 @@
   function armFirstInteractionAutoplay() {
     if (armed) return;
     armed = true;
-    setStatus("Tap anywhere to start listening 🔊");
+    setStatus(onAir === true ? "🔴 We're LIVE now. Tap anywhere to listen 🔊" : "Tap anywhere to start listening 🔊");
     setButton();
     const evs = ["pointerdown", "keydown", "touchend"];
     const kick = (e) => {
@@ -499,6 +542,7 @@
   else window.addEventListener("DOMContentLoaded", tryAutoplay);
 
   player.addEventListener("playing", () => {
+    if (unlockNoise()) return;   // the silent unlock clip, not real audio
     switching = false;
     if (mode === "yt") return;
     // A new song started while a video has the floor (e.g. presenter went off air): hold it.
@@ -509,6 +553,7 @@
     setButton(); setPill();
   });
   player.addEventListener("pause", () => {
+    if (unlockNoise()) return;
     // Ignore pauses we cause by changing songs, handing over to YouTube, or for a video.
     if (switching || player.ended || mode === "yt" || ducked) return;
     // Fill-in music can't be paused (e.g. by headphone/keyboard media keys): resume it.
@@ -517,13 +562,14 @@
     setStatus("Paused"); setButton(); setPill();
   });
   player.addEventListener("ended", () => {
-    if (!intent || mode === "yt") return;
+    if (unlockNoise() || !intent || mode === "yt") return;
     if (mode === "music") onItemEnded();
     else if (onAir === true) { retryTimer = setTimeout(playStream, 3000); }   // brief drop: reconnect
     else if (!nextFill()) offAirIdle();
   });
-  player.addEventListener("waiting", () => { if (intent && mode !== "yt") setStatus("Buffering…"); });
+  player.addEventListener("waiting", () => { if (!unlockNoise() && intent && mode !== "yt") setStatus("Buffering…"); });
   player.addEventListener("error", () => {
+    if (unlockNoise()) return;
     switching = false;
     if (mode === "yt" || !player.getAttribute("src")) return;   // we emptied it on purpose
     if (!intent) { setButton(); setPill(); return; }

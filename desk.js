@@ -99,7 +99,10 @@
         </header>
         <!-- Settings you rarely change: hidden until ⚙ is pressed -->
         <div class="dk-card dk-settings" id="dkSettings" hidden>
-          <label class="dk-micsel">Microphone<select id="dkMicSel" aria-label="Microphone"><option value="">Default microphone</option></select><small id="dkMicNote"></small></label>
+          <label class="dk-micsel">Microphone
+            <span class="dk-microw"><select id="dkMicSel" aria-label="Microphone"><option value="">Default microphone</option></select>
+              <button type="button" class="dk-icon" id="dkMicRefresh" title="Plugged something in? Refresh the list">↻</button></span>
+            <small id="dkMicNote"></small></label>
           <label>Decks<select id="dkDecks"><option value="2">2 decks</option><option value="1">1 deck</option></select></label>
           <label>Quality<select id="dkQuality">
             <option value="64">Low (64 kbps)</option><option value="96">Medium (96 kbps)</option>
@@ -281,18 +284,33 @@
   });
 
   /* ================= choosing the microphone ================= */
-  async function fillMics() {
+  // Browsers only list (and name) the microphones once the site may use one, so when
+  // the list is still anonymous we ask for the mic for a moment, then list them all.
+  let micAsked = false;
+  async function fillMics(ask) {
     const sel = byId("dkMicSel"); if (!sel) return;
-    const list = await window.RFM_AUDIO.devices();
+    let list = await window.RFM_AUDIO.devices();
+    if (ask && !list.some((d) => d.label) && !micAsked && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      micAsked = true;
+      try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach((t) => t.stop()); }
+      catch (_) { byId("dkMicNote").textContent = "Allow the microphone for this site to choose one."; }
+      list = await window.RFM_AUDIO.devices();
+    }
     const cur = window.RFM_AUDIO.deviceId();
     const named = list.some((d) => d.label);
+    const clean = (l) => String(l || "").replace(/^(Default|Communications)\s*-\s*/i, "");
+    const defEntry = list.find((d) => d.deviceId === "default");
+    const real = list.filter((d) => d.deviceId && d.deviceId !== "default" && d.deviceId !== "communications");
     sel.innerHTML = "";
-    const def = el("option", null, "Default microphone"); def.value = ""; sel.appendChild(def);
-    list.filter((d) => d.deviceId && d.deviceId !== "default" && d.deviceId !== "communications").forEach((d, i) => {
-      const o = el("option", null, d.label || "Microphone " + (i + 1)); o.value = d.deviceId; sel.appendChild(o);
-    });
+    const def = el("option", null, defEntry && defEntry.label ? "Default (" + clean(defEntry.label) + ")" : "Default microphone"); def.value = ""; sel.appendChild(def);
+    real.forEach((d, i) => { const o = el("option", null, d.label || "Microphone " + (i + 1)); o.value = d.deviceId; sel.appendChild(o); });
     sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "";
-    byId("dkMicNote").textContent = named ? "" : "Switch the mic on once to see their names.";
+    const phone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    byId("dkMicNote").textContent = !named ? "Allow the microphone for this site to see the names."
+      : real.length <= 1 ? (phone
+        ? "Phones switch to a plugged-in headset mic by themselves: keep Default. Headphones without a mic use the phone's mic."
+        : "Only one microphone found. Check your headphones have a mic, plug them in fully, then press ↻.")
+      : "";
   }
   async function chooseMic(id) {
     try {
@@ -986,8 +1004,9 @@
     byId("dkReload").onclick = () => { loadStationTracks(); loadCarts(); say("Playlist and carts reloaded."); };
     const setSettings = (open) => {
       byId("dkSettings").hidden = !open; byId("dkGear").classList.toggle("open", open); byId("dkGear").setAttribute("aria-expanded", String(open));
-      if (open) fillMics();
+      if (open) fillMics(true);
     };
+    byId("dkMicRefresh").onclick = (e) => { e.preventDefault(); micAsked = false; fillMics(true); say("Microphone list refreshed."); };
     byId("dkGear").onclick = () => setSettings(byId("dkSettings").hidden);
     byId("dkMicPick").onclick = () => { setSettings(true); byId("dkMicSel").focus(); };
     byId("dkMicSel").onchange = (e) => chooseMic(e.target.value);

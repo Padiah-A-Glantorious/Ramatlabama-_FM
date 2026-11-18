@@ -436,3 +436,7 @@ body.meet-full-open { overflow: hidden; }
 .meet-share-bar .m-btn { background: rgba(255,255,255,0.1); color: #fff; }
 .meet-share-label { color: #fff; font-size: 12.5px; font-weight: 700; padding: 0 6px; }
 body.meet-sharing { overflow: hidden; }
+/* "Share my portal screen": the God Admin's page copy, at their window size, scaled to fill */
+.meet-mirror-frame { position: absolute; left: 50%; top: 50%; border: 0; background: #0b0b0e; transform-origin: center center; pointer-events: none; }
+.meet-share-overlay.page-mode .meet-share-video { display: none; }
+.meet-share-overlay { overflow: hidden; }

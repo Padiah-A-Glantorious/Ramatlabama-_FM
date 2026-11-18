@@ -378,7 +378,7 @@ function meetingView(u) {
       presenter: canPresent(db.users.find((x) => x.id === p.id)),
     })),
     agenda: meeting.agenda ? { name: meeting.agenda.name, v: meeting.agenda.v } : null,
-    sharing: meetingLive && meetingLive.sharer && meetPeople.has(meetingLive.sharer) ? { id: meetingLive.sharer, name: meetPeople.get(meetingLive.sharer).name } : null,
+    sharing: meetingLive && meetingLive.sharer && meetPeople.has(meetingLive.sharer) ? { id: meetingLive.sharer, name: meetPeople.get(meetingLive.sharer).name, mode: meetingLive.shareMode || "video" } : null,
     screen: { kind: sc.kind, title: sc.title || "", body: sc.body || "", v: sc.v || 0, by: sc.by || "" },
     leaders: god ? meeting.leaders : undefined,
     presenters: god ? meeting.presenters : undefined,
@@ -488,9 +488,31 @@ function handleMeeting(ws, u, d) {
   if (d.type === "meeting-leave") return meetingLeave(u.id, ws);
   if (d.type === "meeting-share") {            // God Admin shares their screen with everyone in the room
     if (u.role !== "god") return err("Only the God Admin can share their screen.");
-    if (d.on) meetingLive.sharer = u.id;
-    else if (meetingLive.sharer === u.id) meetingLive.sharer = null;
+    if (d.on) { meetingLive.sharer = u.id; meetingLive.shareMode = d.mode === "page" ? "page" : "video"; meetingLive.mirror = null; }
+    else if (meetingLive.sharer === u.id) { meetingLive.sharer = null; meetingLive.mirror = null; }
     return pushMeeting();
+  }
+  // "Share my portal screen": the God Admin's page sends a copy of itself; pass it to the room.
+  // The last full copy is kept so people who join (or reconnect) see it straight away.
+  if (d.type === "meeting-mirror") {
+    if (u.role !== "god" || meetingLive.sharer !== u.id || meetingLive.shareMode !== "page") return;
+    const str = (v, max) => (typeof v === "string" && v.length <= max ? v : undefined);
+    const num = (v) => { const n = Math.round(Number(v)); return n >= 200 && n <= 10000 ? n : 0; };
+    const scrolls = d.scrolls && typeof d.scrolls === "object" && JSON.stringify(d.scrolls).length < 20000 ? d.scrolls : {};
+    const out = { type: "meeting-mirror", w: num(d.w), h: num(d.h), scrolls };
+    const head = str(d.head, 20000), body = str(d.body, 3500000);
+    if (head !== undefined) out.head = head;
+    if (body !== undefined) { out.body = body; out.cls = str(d.cls, 300) || ""; out.hcls = str(d.hcls, 300) || ""; }
+    const m = meetingLive.mirror || (meetingLive.mirror = {});
+    Object.assign(m, out.w ? { w: out.w } : {}, out.h ? { h: out.h } : {}, { scrolls },
+      head !== undefined ? { head } : {}, body !== undefined ? { body, cls: out.cls, hcls: out.hcls } : {});
+    for (const o of meetPeople.values()) if (o.id !== u.id) sendTo(o.ws, out);
+    return;
+  }
+  if (d.type === "meeting-mirror-want") {
+    const m = meetingLive.mirror;
+    if (meetingLive.shareMode === "page" && m && m.body) sendTo(ws, { type: "meeting-mirror", ...m });
+    return;
   }
   if (d.type === "meeting-signal") {
     const t = meetPeople.get(String(d.to || ""));

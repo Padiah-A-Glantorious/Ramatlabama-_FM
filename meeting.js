@@ -59,6 +59,7 @@
         stopRing();
         if (inCall) leaveLocal(d.reason || ("The meeting has ended" + (d.by ? " (ended by " + d.by + ")." : ".")));
       }
+      else if (d.type === "meeting-mirror") applyMirror(d);
       else if (d.type === "meeting-error") say("meetState", d.error, false);
     };
     ws.onclose = () => setTimeout(connect, 2000);
@@ -114,7 +115,7 @@
   }
   function leaveLocal(msg) {
     inCall = false; joining = false;
-    stopShare(true); closeView(); showOverlay(false);
+    stopShare(true); stopMirror(true); closeView(); viewShareId = ""; showOverlay(false);
     [...pcs.keys()].forEach(closePeer);
     if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
     meters.clear();
@@ -206,6 +207,8 @@
      the room gets it over its own video-only connection (separate from the audio ones).
      While someone is sharing, everyone else sees ONLY that screen, filling their whole
      display, with a small bar to mute, raise a hand, change fit/fill and leave. */
+  const canCaptureScreen = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) &&
+    !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
   let shareStream = null;          // sharer: the captured screen
   const sharePcs = new Map();      // sharer: viewerId -> connection
   let viewPc = null, viewQueue = [], viewStream = null, viewShareId = "";
@@ -214,7 +217,7 @@
   async function startShare() {
     if (shareStream) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia)
-      return say("meetState", "This browser cannot share the screen. Use Chrome or Edge on a computer (phones cannot share their screen).", false);
+      return say("meetState", "This browser cannot share the whole screen. Use 📱 Share my portal screen instead.", false);
     // Pick the screen first, while the click still counts (browsers need it), then join.
     let stream;
     try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false }); }
@@ -224,6 +227,7 @@
       await join();
       if (!inCall) { stream.getTracks().forEach((t) => t.stop()); return; }
     }
+    if (mirrorOn) stopMirror();                      // only one kind of share at a time
     shareStream = stream;
     const tr = shareStream.getVideoTracks()[0];
     if (tr) { try { tr.contentHint = "detail"; } catch (_) {} tr.onended = () => stopShare(); }
@@ -256,7 +260,7 @@
     try {
       if (data.screen === "want") { if (shareStream) makeSharePc(from); return; }
       if (data.sdp && data.sdp.type === "offer") {             // viewer: the sharer is sending
-        if (!viewShareId || from !== viewShareId) return;
+        if (!viewShareId || viewShareId !== from + "|video") return;
         if (viewPc) { try { viewPc.close(); } catch (_) {} }
         const pc = viewPc = new RTCPeerConnection({ iceServers: await ice() });
         viewQueue = [];
@@ -279,7 +283,9 @@
   function closeView() {
     if (viewPc) { try { viewPc.close(); } catch (_) {} viewPc = null; }
     viewStream = null; viewQueue = [];
-    if (overlay) { const v = overlay.querySelector("video"); if (v) v.srcObject = null; }
+    if (overlay) { const v = overlay.querySelector("video"); if (v) v.srcObject = null; overlay.classList.remove("has-video"); }
+    if (mirror.frame) { try { mirror.frame.remove(); } catch (_) {} }
+    Object.assign(mirror, { got: false, head: "", body: "", cls: "", hcls: "", w: 0, h: 0, scrolls: {}, applied: "", frame: null, ready: false, loading: false });
   }
   function buildOverlay() {
     if (overlay) return overlay;
@@ -292,7 +298,7 @@
     bar.append(label,
       mk("shMute", "🔇 Mute", () => byId("meetMuteBtn").click()),
       mk("shHand", "✋ Raise hand", () => byId("meetHandBtn").click()),
-      mk("shFit", "⤢ Fit", () => { fillMode = !fillMode; overlay.classList.toggle("fill", fillMode); byId("shFit").textContent = fillMode ? "⤡ Show all" : "⤢ Fill"; }),
+      mk("shFit", "⤢ Fit", () => { fillMode = !fillMode; overlay.classList.toggle("fill", fillMode); byId("shFit").textContent = fillMode ? "⤡ Show all" : "⤢ Fill"; layoutMirror(); }),
       mk("shLeave", "Leave", () => leave()));
     overlay.append(v, msg, bar);
     document.body.appendChild(overlay);
@@ -316,10 +322,19 @@
   function syncShare() {
     const s = st && st.sharing;
     if (s && s.id === me.id) sharePendingUntil = 0;
-    if (shareStream && !(s && s.id === me.id) && Date.now() > sharePendingUntil) stopShare(true);   // the server says we are no longer the sharer
+    const late = Date.now() > sharePendingUntil;
+    // The server says we are no longer sharing (in this mode): stop.
+    if (shareStream && !(s && s.id === me.id && s.mode !== "page") && late) stopShare(true);
+    if (mirrorOn && !(s && s.id === me.id && s.mode === "page") && late) stopMirror(true);
     if (s && inCall && s.id !== me.id) {
-      if (viewShareId !== s.id) { closeView(); viewShareId = s.id; send({ type: "meeting-signal", to: s.id, data: { screen: "want" } }); }
+      const key = s.id + "|" + (s.mode || "video");
+      if (viewShareId !== key) {
+        closeView(); viewShareId = key;
+        if (s.mode === "page") send({ type: "meeting-mirror-want" });
+        else send({ type: "meeting-signal", to: s.id, data: { screen: "want" } });
+      }
       const o = buildOverlay();
+      o.classList.toggle("page-mode", s.mode === "page");
       o.querySelector(".meet-share-label").textContent = "🖥 " + s.name + " is sharing their screen";
       byId("shMute").textContent = muted ? "🎤 Unmute" : "🔇 Mute";
       const mine = (st.people || []).find((p) => p.id === me.id);
@@ -331,7 +346,164 @@
     }
   }
   // Ask again if the picture hasn't arrived (lost message, sharer reconnecting).
-  setInterval(() => { if (viewShareId && inCall && !viewStream) send({ type: "meeting-signal", to: viewShareId, data: { screen: "want" } }); }, 4000);
+  setInterval(() => {
+    if (!viewShareId || !inCall) return;
+    const [id, mode] = viewShareId.split("|");
+    if (mode === "page") { if (!mirror.got) send({ type: "meeting-mirror-want" }); }
+    else if (!viewStream) send({ type: "meeting-signal", to: id, data: { screen: "want" } });
+  }, 4000);
+
+  /* ================= God Admin: share the PORTAL page (works on phones) =================
+     Phone browsers can't capture the screen, so instead the God Admin's page sends a live
+     copy of itself (what's on the page, typed values, scroll positions, window size) about
+     once a second when something changes. Everyone else draws that copy at the God Admin's
+     exact window size, scaled to fill their own screen. The copy can't run any code
+     (sandboxed frame, no scripts) and can't be clicked. The God Admin's login token is
+     taken out of it; each viewer's own token is put back so pictures still load. */
+  let mirrorOn = false, mirrorObs = null, mirrorTimer = 0, mirrorQueued = 0, mirrorLastAt = 0, mirrorSeq = 0;
+  let mirrorSent = { head: "", body: "", cls: "", hcls: "", w: 0, h: 0, sc: "" };
+  const mirror = { got: false, head: "", body: "", cls: "", hcls: "", w: 0, h: 0, scrolls: {}, applied: "", frame: null, ready: false };
+  const T_MARK = "__RFM_T__";
+  async function startMirror() {
+    if (mirrorOn || !st || !st.isGod) return;
+    if (!inCall) {
+      if (!st.live) send({ type: "meeting-start" });   // no meeting yet: start one and call everyone
+      await join();
+      if (!inCall) return;
+    }
+    if (shareStream) stopShare();                    // only one kind of share at a time
+    mirrorOn = true;
+    mirrorSent = { head: "", body: "", cls: "", hcls: "", w: 0, h: 0, sc: "" };
+    sharePendingUntil = Date.now() + 8000;
+    send({ type: "meeting-share", on: true, mode: "page" });
+    mirrorObs = new MutationObserver(queueMirror);
+    mirrorObs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    ["scroll", "input", "change", "resize"].forEach((ev) => window.addEventListener(ev, queueMirror, true));
+    mirrorTimer = setInterval(queueMirror, 3000);
+    queueMirror();
+    say("meetState", "📱 Everyone in the room now sees your portal screen. Use the portal as normal; press Stop sharing when done.", true);
+    render();
+  }
+  function stopMirror(quiet) {
+    if (!mirrorOn) return;
+    mirrorOn = false;
+    if (mirrorObs) { mirrorObs.disconnect(); mirrorObs = null; }
+    ["scroll", "input", "change", "resize"].forEach((ev) => window.removeEventListener(ev, queueMirror, true));
+    clearInterval(mirrorTimer); clearTimeout(mirrorQueued); mirrorQueued = 0;
+    if (!quiet) { send({ type: "meeting-share", on: false }); say("meetState", "Screen sharing stopped.", true); render(); }
+  }
+  function queueMirror() {
+    if (!mirrorOn || mirrorQueued) return;
+    mirrorQueued = setTimeout(() => { mirrorQueued = 0; sendMirror(); }, Math.max(250, 1000 - (Date.now() - mirrorLastAt)));
+  }
+  function snapshotBody() {
+    const src = document.body, clone = src.cloneNode(true);
+    const a = src.querySelectorAll("*"), b = clone.querySelectorAll("*");
+    const scrolls = {};
+    for (let i = 0; i < a.length && i < b.length; i++) {
+      const o = a[i], c = b[i], tag = o.tagName;
+      if (tag === "INPUT") {
+        const ty = (o.type || "").toLowerCase();
+        if (ty === "password") c.setAttribute("value", "");
+        else if (ty === "checkbox" || ty === "radio") { if (o.checked) c.setAttribute("checked", ""); else c.removeAttribute("checked"); }
+        else if (ty !== "file") c.setAttribute("value", o.value);
+      } else if (tag === "TEXTAREA") c.textContent = o.value;
+      else if (tag === "SELECT") [...c.options].forEach((op, j) => { if (j === o.selectedIndex) op.setAttribute("selected", ""); else op.removeAttribute("selected"); });
+      else if (tag === "CANVAS") {
+        try {
+          const img = document.createElement("img");
+          img.className = o.className; img.setAttribute("style", o.getAttribute("style") || "");
+          img.src = o.toDataURL("image/jpeg", 0.6);
+          c.replaceWith(img);
+        } catch (_) {}
+      }
+      if (o.scrollTop || o.scrollLeft) { c.setAttribute("data-rfm-s", String(i)); scrolls[i] = [o.scrollTop, o.scrollLeft]; }
+    }
+    // Leave out things that can't or mustn't be copied.
+    clone.querySelectorAll("script, noscript, audio, video, #meetShareOverlay, #meetAudio").forEach((n) => n.remove());
+    clone.querySelectorAll("iframe").forEach((n) => { const d = document.createElement("div"); d.className = n.className; d.setAttribute("style", (n.getAttribute("style") || "") + ";background:#111"); n.replaceWith(d); });
+    const se = document.scrollingElement || document.documentElement;
+    scrolls.doc = [se.scrollTop, se.scrollLeft];
+    let html = clone.innerHTML;
+    // Never hand the God Admin's login token to anyone.
+    if (token) html = html.split(encodeURIComponent(token)).join(T_MARK).split(token).join(T_MARK);
+    return { html, scrolls };
+  }
+  function sendMirror() {
+    if (!mirrorOn || !inCall) return;
+    mirrorLastAt = Date.now();
+    let snap;
+    try { snap = snapshotBody(); } catch (_) { return; }
+    const head = [...document.head.querySelectorAll('link[rel="stylesheet"], style')].map((n) => n.outerHTML).join("");
+    const msg = { type: "meeting-mirror", seq: ++mirrorSeq, w: window.innerWidth, h: window.innerHeight, scrolls: snap.scrolls };
+    const cls = document.body.className, hcls = document.documentElement.className, sc = JSON.stringify(snap.scrolls);
+    let changed = msg.w !== mirrorSent.w || msg.h !== mirrorSent.h || sc !== mirrorSent.sc;
+    if (head !== mirrorSent.head) { msg.head = head; changed = true; }
+    if (snap.html !== mirrorSent.body || cls !== mirrorSent.cls || hcls !== mirrorSent.hcls) { msg.body = snap.html; msg.cls = cls; msg.hcls = hcls; changed = true; }
+    if (!changed) return;
+    if (msg.body && msg.body.length > 3500000) { say("meetState", "This page is too big to share. Close big pictures or the agenda first.", false); return; }
+    mirrorSent = { head, body: snap.html, cls, hcls, w: msg.w, h: msg.h, sc };
+    send(msg);
+  }
+
+  // Viewer: draw the God Admin's page copy, at their window size, scaled to our screen.
+  function applyMirror(d) {
+    const s = st && st.sharing;
+    if (!s || s.mode !== "page" || s.id === me.id || !inCall) return;
+    const o = buildOverlay();
+    if (!mirror.frame) {
+      const f = document.createElement("iframe");
+      f.className = "meet-mirror-frame";
+      f.setAttribute("sandbox", "allow-same-origin");   // no scripts can run inside
+      f.setAttribute("tabindex", "-1"); f.setAttribute("aria-label", "Shared screen");
+      o.insertBefore(f, o.firstChild);
+      mirror.frame = f; mirror.ready = false;
+    }
+    let reload = !mirror.ready && !mirror.loading;
+    if (typeof d.head === "string" && d.head !== mirror.head) { mirror.head = d.head; reload = true; }
+    if (typeof d.body === "string") {
+      mirror.body = d.body.split(T_MARK).join(encodeURIComponent(token || ""));
+      mirror.cls = String(d.cls || ""); mirror.hcls = String(d.hcls || "");
+    }
+    if (d.w) mirror.w = d.w;
+    if (d.h) mirror.h = d.h;
+    if (d.scrolls && typeof d.scrolls === "object") mirror.scrolls = d.scrolls;
+    if (!mirror.body) return;
+    mirror.got = true;
+    o.classList.add("has-video");
+    if (mirror.loading && !reload) return;   // the frame is still loading: it draws the latest copy when ready
+    if (reload) {
+      mirror.ready = false; mirror.loading = true; mirror.applied = "";
+      mirror.frame.onload = () => { mirror.loading = false; mirror.ready = true; fillMirror(); };
+      mirror.frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><base href="' + location.origin + '/">' + mirror.head +
+        "<style>*{pointer-events:none!important}</style></head><body></body></html>";
+    } else fillMirror();
+  }
+  function fillMirror() {
+    const f = mirror.frame;
+    const doc = f && f.contentDocument;
+    if (!doc || !doc.body) return;
+    if (mirror.applied !== mirror.body) { doc.body.innerHTML = mirror.body; mirror.applied = mirror.body; }
+    doc.body.className = mirror.cls; doc.documentElement.className = mirror.hcls;
+    layoutMirror();
+    for (const k of Object.keys(mirror.scrolls)) {
+      const v = mirror.scrolls[k];
+      if (!Array.isArray(v)) continue;
+      const n = k === "doc" ? (doc.scrollingElement || doc.documentElement) : doc.querySelector('[data-rfm-s="' + k + '"]');
+      if (n) { n.scrollTop = v[0] || 0; n.scrollLeft = v[1] || 0; }
+    }
+  }
+  // The frame is exactly the God Admin's window size (so the page lays out the same),
+  // then scaled to fill this screen: "Show all" fits it inside, "Fill" covers edge to edge.
+  function layoutMirror() {
+    const f = mirror.frame;
+    if (!f || !mirror.w || !mirror.h) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const s = fillMode ? Math.max(vw / mirror.w, vh / mirror.h) : Math.min(vw / mirror.w, vh / mirror.h);
+    f.style.width = mirror.w + "px"; f.style.height = mirror.h + "px";
+    f.style.transform = "translate(-50%, -50%) scale(" + s + ")";
+  }
+  window.addEventListener("resize", () => { if (mirror.frame) layoutMirror(); });
   // A new person joined while sharing: they ask for the picture themselves (see syncShare).
   /* ================= talking glow ================= */
   function addMeter(id, stream) {
@@ -439,9 +611,15 @@
     renderTiles();
     renderScreen();
     const sb = byId("meetShareBtn");
-    sb.hidden = !st.isGod;   // God Admin: always there (it joins the meeting for you)
-    sb.textContent = shareStream ? "⏹ Stop sharing screen" : "🖥 Share my screen";
+    // God Admin: always there (they join the meeting for you). Whole-screen sharing only
+    // works on computers; sharing the portal page works everywhere, phones included.
+    sb.hidden = !st.isGod || !canCaptureScreen;
+    sb.textContent = shareStream ? "⏹ Stop sharing screen" : "🖥 Share my whole screen";
     sb.classList.toggle("on", !!shareStream);
+    const pb = byId("meetMirrorBtn");
+    pb.hidden = !st.isGod;
+    pb.textContent = mirrorOn ? "⏹ Stop sharing" : "📱 Share my portal screen";
+    pb.classList.toggle("on", mirrorOn);
     syncShare();
   }
 
@@ -747,6 +925,7 @@
     byId("updateNowBtn").onclick = () => location.reload();
     byId("meetEndBtn").onclick = () => { if (confirm("End the meeting for everyone?")) send({ type: "meeting-end" }); };
     byId("meetShareBtn").onclick = () => { if (shareStream) stopShare(); else startShare(); };
+    byId("meetMirrorBtn").onclick = () => { if (mirrorOn) stopMirror(); else startMirror(); };
     byId("meetMuteBtn").onclick = () => {
       muted = !muted;
       if (mic) mic.getAudioTracks().forEach((t) => { t.enabled = !muted; });

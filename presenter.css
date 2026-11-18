@@ -449,8 +449,13 @@ body.meet-sharing { overflow: hidden; }
 .hdr-title .access-badge { margin-left: 0; flex: 0 0 auto; }
 .welcome-line {
   max-width: 1000px; width: 100%; margin: 0 auto; padding: 12px clamp(12px, 2vw, 24px) 0;
+  display: flex; flex-direction: column; gap: 3px;
   font-size: clamp(15px, 1.8vw, 18px); font-weight: 700; color: var(--text);
 }
+.welcome-job { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.welcome-job small { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.welcome-job small:empty { display: none; }
+.welcome-job .access-badge { margin-left: 0; padding: 2px 9px; font-size: 10.5px; }
 body.desk-open .welcome-line { max-width: none; }
 
 /* ---------- PHONES ONLY: the sections are in a floating, see-through ☰ menu ----------
@@ -461,7 +466,7 @@ body.desk-open .welcome-line { max-width: none; }
   .pres-topbar { flex-wrap: nowrap; gap: 10px; padding: 10px; }
   .pres-topbar .brand { min-width: 0; flex: 1 1 auto; }
   .hdr-title { gap: 8px; }
-  .hdr-title .access-badge { padding: 3px 8px; font-size: 10.5px; }
+  .welcome-job small { font-size: 12px; }
   .pres-topbar .btn-ghost { flex: 0 0 auto; white-space: nowrap; padding: 8px 11px; font-size: 12.5px; }
   .welcome-line { padding: 10px 14px 0; font-size: 15px; }
   body.desk-open .welcome-line { padding: 8px 10px 0; font-size: 14px; }
@@ -495,7 +500,7 @@ body.desk-open .welcome-line { max-width: none; }
   }
   .portal-tabs .ptab.active { background: linear-gradient(135deg, #f1cf72, #d4af37); color: #231a08; border-color: transparent; font-weight: 800; }
   .portal-tabs .ptab[hidden] { display: none; }
-  .hdr-title .access-badge { display: none; }   /* phones: room for the job title */
+
   /* a light veil behind it: tap anywhere outside to close */
   .menu-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .18); }
   .menu-backdrop[hidden] { display: none; }

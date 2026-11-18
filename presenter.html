@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="presenter.css?v=37" />
+  <link rel="stylesheet" href="presenter.css?v=38" />
   <link rel="stylesheet" href="desk.css?v=11" />
 </head>
 <body class="presenter-body">
@@ -66,16 +66,16 @@
       </button>
       <div class="brand">
         <span class="brand-logo"><img src="assets/logo.webp" alt="Ramatlabama FM" /></span>
-        <div class="hdr-title">
-          <strong id="welcomeTitle">Station Portal</strong>
-          <span class="access-badge" id="accessBadge"></span>
-        </div>
+        <div class="hdr-title"><strong>Ramatlabama FM</strong></div>
       </div>
       <button class="btn-ghost" id="logoutBtn">Log out</button>
     </header>
 
-    <!-- Where the tabs used to be: the welcome line -->
-    <div class="welcome-line"><span id="welcomeName">Welcome</span></div>
+    <!-- Where the tabs used to be: welcome, and the job title under it -->
+    <div class="welcome-line">
+      <span id="welcomeName">Welcome</span>
+      <span class="welcome-job"><small id="welcomeTitle"></small><span class="access-badge" id="accessBadge"></span></span>
+    </div>
 
     <!-- The sections: a floating menu opened with ☰ -->
     <div class="menu-backdrop" id="menuBackdrop" hidden></div>
@@ -429,6 +429,6 @@
   <script src="render.js?v=4"></script>
   <script src="music.js?v=6"></script>
   <script src="meeting.js?v=12"></script>
-  <script src="presenter.js?v=28"></script>
+  <script src="presenter.js?v=29"></script>
 </body>
 </html>

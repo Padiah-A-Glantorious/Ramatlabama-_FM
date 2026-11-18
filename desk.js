@@ -33,6 +33,7 @@
   let wantLive = false, rec = null, recMime = "", sendChain = Promise.resolve(), wakeLock = null, liveSince = 0;
   let listenAudio = null, wasHiddenLive = false;
   let recs = [], recSeqSeen = 0, recCanManage = false, recPlayer = null, shows = null;
+  let lastLiveErr = "", lastBusyBy = "";
 
   /* ================= markup ================= */
   function deckHtml(D) {
@@ -84,7 +85,7 @@
             <button type="button" class="dk-btn" id="dkStop">STOP</button>
             <button type="button" class="dk-btn dk-rec" id="dkRec" title="Go live first to record">● REC</button>
           </div>
-          <div class="dk-status" id="dkStatus">Off air</div>
+          <span class="dk-spacer"></span>
           <div class="dk-topbtns">
             <button type="button" class="dk-pill dk-linespill" id="dkCalls" title="Calls: open the lines, see who's waiting">📞 <span>LINES</span> <b id="dkCallsN"></b></button>
             <span class="dk-micgroup">
@@ -186,7 +187,7 @@
           </section>
           <section class="dk-card dk-recs">
             <div class="dk-cartbar">
-              <div><strong>Recordings</strong><small>While live, press ● REC to record. Saved as MP3 when you stop recording or go off air. Downloading removes it from the server.</small></div>
+              <div><strong>Recordings</strong><small>Press ● REC to record, live or not. Saved as MP3 when you press REC again (or go off air). Downloading removes it from the server.</small></div>
               <span class="dk-count" id="dkRecUsed"></span>
             </div>
             <div class="dk-reclist" id="dkRecList"><p class="dk-empty">No recordings yet.</p></div>
@@ -216,6 +217,7 @@
     N.callsIn = ctx.createGain();                         // callers arrive here (studio.js)
     N.calls = ctx.createGain(); N.calls.gain.value = faderGain(80);
     N.mic = ctx.createGain(); N.mic.gain.value = faderGain(80);
+    N.micGate = ctx.createGain(); N.micGate.gain.value = 0; N.micGate.connect(N.mic);   // TALK fades this
     N.carts = ctx.createGain();
     N.out = ctx.createMediaStreamDestination();
     N.duck.connect(N.musicBus); N.carts.connect(N.musicBus);
@@ -252,21 +254,30 @@
   }
   function applyDuck() {
     if (!N) return;
+    // Gentle dip like a real desk: down over ~0.3 s, back up over ~1 s, never a jump.
     const down = micOn && byId("dkTalkover").checked;
-    N.duck.gain.setTargetAtTime(down ? 0.25 : 1, N.ctx.currentTime, down ? 0.05 : 0.35);
+    const g = N.duck.gain, t = N.ctx.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.setTargetAtTime(down ? 0.3 : 1, t + (down ? 0 : 0.2), down ? 0.1 : 0.3);
   }
 
   /* ================= microphone (TALK) ================= */
   async function setTalk(on) {
     await wake();
+    // Smooth on/off: the mic is opened once and then kept open, and TALK only fades a
+    // gate up or down. Opening/closing the device every time is what makes clicks and
+    // drop-outs (Windows and headsets switch audio modes when a mic opens).
     if (on && !micOn) {
-      try { const s = await window.RFM_AUDIO.mic(); micHeld = true; micSrc = N.ctx.createMediaStreamSource(s); micSrc.connect(N.mic); }
-      catch (_) { return say("Your microphone is blocked. Allow the microphone for this site.", true); }
+      if (!micSrc) {
+        try { const s = await window.RFM_AUDIO.mic(); micHeld = true; micSrc = N.ctx.createMediaStreamSource(s); micSrc.connect(N.micGate); }
+        catch (_) { return say("Your microphone is blocked. Allow the microphone for this site.", true); }
+      }
       micOn = true;
+      fadeGate(1, 0.12);
     } else if (!on && micOn) {
-      try { micSrc.disconnect(); } catch (_) {}
-      micSrc = null; micOn = false;
-      if (micHeld) { window.RFM_AUDIO.releaseMic(); micHeld = false; }
+      micOn = false;
+      fadeGate(0, 0.18);
     }
     const b = byId("dkTalk");
     b.classList.toggle("on", micOn);
@@ -275,11 +286,18 @@
     applyDuck();
     if (micOn) fillMics();   // names of the mics show once the site may use one
   }
-  // Another microphone was chosen while it's open: the MIC fader gets the new one.
+  // A short, click-free fade of the mic gate (linear ramp from where it is now).
+  function fadeGate(to, secs) {
+    const g = N.micGate.gain, t = N.ctx.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(to, t + secs);
+  }
+  // Another microphone was chosen while it's open: swap it under a quick fade.
   window.RFM_AUDIO.onMicChange((stream) => {
-    if (!micOn || !N) return;
+    if (!micSrc || !N) return;
     const old = micSrc;
-    micSrc = N.ctx.createMediaStreamSource(stream); micSrc.connect(N.mic);
+    micSrc = N.ctx.createMediaStreamSource(stream); micSrc.connect(N.micGate);
     try { old.disconnect(); } catch (_) {}
   });
 
@@ -715,6 +733,13 @@
     sws.binaryType = "arraybuffer";
     const me0 = solo = { ws: sws, rec: null, since: 0, stopping: false, chain: Promise.resolve() };
     sws.onopen = () => sws.send(JSON.stringify({ type: "rec-solo-start", token, title: recTitle(), kbps: Number(byId("dkQuality").value) }));
+    // An older server doesn't know about recording off air: say so instead of waiting forever.
+    setTimeout(() => {
+      if (solo !== me0 || me0.rec) return;
+      solo = null; try { sws.close(); } catch (_) {}
+      say("The server didn't start the recording. Restart the server (it may be running old code), then try again.", true);
+      renderRec();
+    }, 6000);
     sws.onmessage = (ev) => {
       if (typeof ev.data !== "string") return;
       let d; try { d = JSON.parse(ev.data); } catch { return; }
@@ -893,30 +918,30 @@
   function renderLive() {
     const s = state && state.live;
     const mine = !!(s && me && s.userId === me.id);
-    const go = byId("dkGo"), st = byId("dkStatus"), top = document.querySelector(".dk-top");
+    const go = byId("dkGo");
     if (!go) return;
     const onAir = mine && wantLive;
+    // No status line: the LIVE button carries the time, its tooltip the details,
+    // and problems pop up as a message (once each).
     go.classList.toggle("on", onAir);
-    go.textContent = onAir ? "LIVE" : "GO LIVE";
+    go.classList.toggle("busy", !!s && !mine);
+    go.textContent = onAir ? "LIVE " + fmt((Date.now() - s.since) / 1000) : wantLive ? "STARTING…" : "GO LIVE";
     byId("dkLiveDot").classList.toggle("on", onAir);
     byId("dkStop").disabled = !onAir && !(mine && s);
-    top.classList.toggle("live", onAir);
-    top.classList.toggle("busy", !!s && !mine);
     byId("dkQuality").disabled = onAir;
-    let text = "Off air";
-    if (s && !mine) text = "🔴 " + s.by + " is live right now.";
-    else if (s && mine) {
-      const since = fmt((Date.now() - s.since) / 1000);
-      const where = s.target === "famcast"
-        ? (s.famcast === "on" ? "Famcast connected" : s.famcast === "connecting" ? "connecting to Famcast…" : s.famcast === "error" ? "Famcast problem" : "starting…")
-        : "preview only (not on Famcast)";
-      text = "LIVE " + since + " · " + where + (s.receiving ? "" : " · waiting for audio…") + (s.error ? " · " + s.error : "");
-    } else if (wantLive) text = "Starting…";
-    else if (state && !state.famcastReady) text = "Off air · Famcast isn't set up here, so GO LIVE runs a preview";
-    st.textContent = text;
-    st.title = text;
-    st.classList.toggle("bad", !!(s && mine && s.error));
-    st.classList.toggle("live", onAir && !(s && s.error));
+    let tip = "Go live";
+    if (s && !mine) tip = s.by + " is live right now.";
+    else if (s && mine) tip = s.target === "famcast"
+      ? (s.famcast === "on" ? "On air on Famcast" : s.famcast === "connecting" ? "Connecting to Famcast…" : s.famcast === "error" ? "Famcast problem" : "Starting…")
+      : "Preview only (not on Famcast)";
+    else if (state && !state.famcastReady) tip = "Famcast isn't set up on this server, so GO LIVE runs a preview";
+    go.title = tip;
+    const err = s && mine ? s.error || "" : "";
+    if (err && err !== lastLiveErr) say(err, true);
+    lastLiveErr = err;
+    const busyBy = s && !mine ? s.by : "";
+    if (busyBy && busyBy !== lastBusyBy) say("🔴 " + busyBy + " is live right now.");
+    lastBusyBy = busyBy;
     renderRec();
   }
   setInterval(renderLive, 1000);
@@ -991,7 +1016,13 @@
     byId("dkXfade").oninput = () => { engine(); applyXfade(); };
     byId("dkMonitor").oninput = (e) => { engine(); N.monitor.gain.setTargetAtTime(faderGain(Number(e.target.value)), N.ctx.currentTime, 0.02); };
     byId("dkTalkover").onchange = applyDuck;
-    byId("dkTalk").onclick = () => setTalk(!micOn);
+    // Taps are applied in order: a second tap while the mic is still opening isn't lost.
+    let micWant = false, talkChain = Promise.resolve();
+    byId("dkTalk").onclick = () => {
+      micWant = !micWant;
+      const want = micWant;
+      talkChain = talkChain.then(() => setTalk(want)).then(() => { if (want && !micOn) micWant = false; }).catch(() => {});   // blocked mic: next tap tries again
+    };
     byId("dkDecks").onchange = () => {
       const one = byId("dkDecks").value === "1";
       byId("dk").classList.toggle("one-deck", one);

@@ -38,7 +38,9 @@
 
   window.RFM_AUDIO = {
     ctx() {
-      if (!ctx || ctx.state === "closed") ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
+      // "balanced": a slightly bigger buffer than "interactive", so busy moments (loading a
+      // song, drawing waveforms) don't make the music stutter. Calls stay fine.
+      if (!ctx || ctx.state === "closed") ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "balanced" });
       return ctx;
     },
     async resume() { const c = this.ctx(); if (c.state !== "running") { try { await c.resume(); } catch (_) {} } return c; },

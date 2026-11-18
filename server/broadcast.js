@@ -71,8 +71,12 @@ module.exports = function setupBroadcast(h) {
     setTimeout(() => { try { ff.kill("SIGKILL"); } catch (_) {} }, 3000);
   }
   function startFfmpeg() {
-    const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "2", "-ar", "44100",
-      "-c:a", "libmp3lame", "-b:a", bc.kbps + "k", "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "pipe:1"];
+    // Small probe: start encoding at once instead of buffering ~5 s to guess the format.
+    const args = ["-hide_banner", "-loglevel", "error", "-probesize", "32768", "-analyzeduration", "0", "-fflags", "+nobuffer",
+      "-i", "pipe:0", "-vn", "-ac", "2", "-ar", "44100",
+      // -flush_packets 1: send each MP3 frame at once (no 1-2 s lag on air or when saving)
+      "-c:a", "libmp3lame", "-b:a", bc.kbps + "k", "-flush_packets", "1",
+      "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "pipe:1"];
     let ff;
     try { ff = spawn(FFMPEG, args, { stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { bc.ffError = "The audio encoder (ffmpeg) isn't available on the server."; pushSoon(); return null; }
@@ -194,8 +198,9 @@ module.exports = function setupBroadcast(h) {
     sendTo(ws, { type: "rec-solo-ok", since: s.start });
   }
   function soloEncoder(s) {
-    const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "2", "-ar", "44100",
-      "-c:a", "libmp3lame", "-b:a", s.kbps + "k", "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "pipe:1"];
+    const args = ["-hide_banner", "-loglevel", "error", "-probesize", "32768", "-analyzeduration", "0", "-fflags", "+nobuffer",
+      "-i", "pipe:0", "-vn", "-ac", "2", "-ar", "44100",
+      "-c:a", "libmp3lame", "-b:a", s.kbps + "k", "-flush_packets", "1", "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "pipe:1"];
     let ff;
     try { ff = spawn(FFMPEG, args, { stdio: ["pipe", "pipe", "pipe"] }); } catch (_) { return null; }
     ff.stdin.on("error", () => {});

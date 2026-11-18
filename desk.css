@@ -45,8 +45,10 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 /* ---- the one bar on top: GO LIVE · STOP · REC | status | LINES · TALK · ⚙ · connection ---- */
 .dk-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; position: relative; }
 .dk-top { display: flex; align-items: center; gap: 12px; padding: 10px 12px; position: sticky; top: 0; z-index: 6; }
-.dk-top.live { border-color: var(--live); box-shadow: 0 0 22px rgba(255, 77, 77, 0.16); }
-.dk-top.busy { border-color: var(--deck-b); }
+.dk-spacer { flex: 1 1 auto; }
+.dk-go { font-variant-numeric: tabular-nums; }
+.dk-go.on { min-width: 118px !important; }
+.dk-go.busy { color: var(--deck-b); border-color: color-mix(in srgb, var(--deck-b) 55%, transparent); background: transparent; }
 .dk-transport { display: flex; gap: 8px; flex: 0 0 auto; }
 .dk-transport .dk-btn { min-width: 92px; padding: 11px 14px; font-size: 12px; }
 .dk-go { color: var(--calls); border-color: rgba(62, 207, 142, 0.45); background: rgba(62, 207, 142, 0.08); }
@@ -75,10 +77,6 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 .dk-micsel small { font-size: 10.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--faint); }
 .dk-micsel small:empty { display: none; }
 @keyframes dkPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 77, .55); } 50% { box-shadow: 0 0 0 7px rgba(255, 77, 77, 0); } }
-.dk-status { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dk-status.live { color: #ffb3ab; font-weight: 700; }
-.dk-status.live::before { content: "● "; color: var(--live); }
-.dk-status.bad { color: #ff8a80; white-space: normal; }
 .dk-topbtns { display: flex; gap: 6px; align-items: center; flex: 0 0 auto; }
 .dk-pill { cursor: pointer; border-radius: 999px; padding: 9px 13px; font-size: 11px; font-weight: 800; letter-spacing: .8px; border: 1px solid var(--dk-line2); background: #161618; color: var(--muted); white-space: nowrap; }
 .dk-pill b { color: #111; background: var(--calls); border-radius: 999px; padding: 0 6px; margin-left: 2px; }
@@ -190,9 +188,11 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 
 /* ---- playlist + carts ---- */
 .dk-bottom {
+  /* Lines on the left; the playlist, cart wall and recordings stack on the right with no gaps. */
   display: grid; gap: 12px; align-items: start;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr);
-  grid-template-areas: "lines list carts" "recs recs recs";
+  grid-template-columns: minmax(300px, 1fr) minmax(0, 1.7fr);
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas: "lines list" "lines carts" "lines recs";
 }
 .dk-list { grid-area: list; } .dk-carts { grid-area: carts; } .dk-recs { grid-area: recs; }
 .dk-auto { cursor: pointer; }
@@ -249,8 +249,8 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 .dk-msg.bad { border-color: #ff6b5e; color: #ffb3ab; }
 
 /* ---- smaller screens ---- */
-@media (max-width: 1280px) {
-  .dk-bottom { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); grid-template-areas: "lines list" "carts recs"; }
+@media (min-width: 1500px) {
+  .dk-lines { position: sticky; top: 76px; }   /* big screens: the callers stay in view while you scroll */
 }
 @media (max-width: 1180px) {
   .dk-decks { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -263,7 +263,6 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 @media (max-width: 900px) {
   .dk-bottom { grid-template-columns: 1fr; grid-template-areas: "lines" "list" "carts" "recs"; }
   .dk-top { flex-wrap: wrap; }
-  .dk-status { order: 3; flex: 1 1 100%; }
 }
 @media (max-width: 640px) {
   /* Phones: the bar stays on top (GO LIVE · STOP · REC across the full width), then the
@@ -276,7 +275,7 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
   .dk-transport .dk-livedot { flex: 0 0 12px; width: 12px; height: 12px; }
   .dk-micgroup { flex: 1 1 auto; }
   .dk-mic { flex: 1 1 auto; width: auto; }
-  .dk-status { order: 2; text-align: center; }
+  .dk-spacer { display: none; }
   .dk-topbtns { order: 3; }
   .dk-settings label { min-width: 0; flex: 1 1 140px; }
   .dk-setbtns { margin-left: 0; width: 100%; }

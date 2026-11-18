@@ -210,14 +210,24 @@
   const sharePcs = new Map();      // sharer: viewerId -> connection
   let viewPc = null, viewQueue = [], viewStream = null, viewShareId = "";
   let overlay = null, fillMode = false;
+  let sharePendingUntil = 0;     // waiting for the server to confirm we are the sharer
   async function startShare() {
-    if (!inCall || shareStream) return;
+    if (shareStream) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia)
-      return say("meetState", "This browser cannot share the screen. Use Chrome or Edge on a computer.", false);
-    try { shareStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false }); }
-    catch (_) { shareStream = null; return say("meetState", "Screen sharing was cancelled.", false); }
+      return say("meetState", "This browser cannot share the screen. Use Chrome or Edge on a computer (phones cannot share their screen).", false);
+    // Pick the screen first, while the click still counts (browsers need it), then join.
+    let stream;
+    try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false }); }
+    catch (_) { return say("meetState", "Screen sharing was cancelled.", false); }
+    if (!inCall) {
+      if (!st.live) send({ type: "meeting-start" });   // no meeting yet: start one and call everyone
+      await join();
+      if (!inCall) { stream.getTracks().forEach((t) => t.stop()); return; }
+    }
+    shareStream = stream;
     const tr = shareStream.getVideoTracks()[0];
     if (tr) { try { tr.contentHint = "detail"; } catch (_) {} tr.onended = () => stopShare(); }
+    sharePendingUntil = Date.now() + 8000;
     send({ type: "meeting-share", on: true });
     say("meetState", "🖥 You are sharing your screen. Everyone in the room sees only it.", true);
     render();
@@ -305,7 +315,8 @@
   // Called on every render: follow who is sharing (if anyone) and show / hide the full-screen view.
   function syncShare() {
     const s = st && st.sharing;
-    if (shareStream && !(s && s.id === me.id)) stopShare(true);   // the server says we are no longer the sharer
+    if (s && s.id === me.id) sharePendingUntil = 0;
+    if (shareStream && !(s && s.id === me.id) && Date.now() > sharePendingUntil) stopShare(true);   // the server says we are no longer the sharer
     if (s && inCall && s.id !== me.id) {
       if (viewShareId !== s.id) { closeView(); viewShareId = s.id; send({ type: "meeting-signal", to: s.id, data: { screen: "want" } }); }
       const o = buildOverlay();
@@ -428,7 +439,7 @@
     renderTiles();
     renderScreen();
     const sb = byId("meetShareBtn");
-    sb.hidden = !(st.isGod && inCall);
+    sb.hidden = !st.isGod;   // God Admin: always there (it joins the meeting for you)
     sb.textContent = shareStream ? "⏹ Stop sharing screen" : "🖥 Share my screen";
     sb.classList.toggle("on", !!shareStream);
     syncShare();

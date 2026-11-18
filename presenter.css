@@ -443,17 +443,29 @@ body.meet-sharing { overflow: hidden; }
 .meet-share-overlay.page-mode .meet-share-video { display: none; }
 .meet-share-overlay { overflow: hidden; }
 
-/* ---------- Phones: the sections go into a ☰ menu that slides in from the left ---------- */
+/* ---------- Header: logo + job title; the welcome line sits where the tabs start ---------- */
+.hdr-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hdr-title strong { font-size: clamp(14px, 1.8vw, 17px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hdr-title .access-badge { margin-left: 0; flex: 0 0 auto; }
+.welcome-line {
+  max-width: 1000px; width: 100%; margin: 0 auto; padding: 12px clamp(12px, 2vw, 24px) 0;
+  font-size: clamp(15px, 1.8vw, 18px); font-weight: 700; color: var(--text);
+}
+body.desk-open .welcome-line { max-width: none; }
+
+/* ---------- PHONES ONLY: the sections are in a floating, see-through ☰ menu ----------
+   Every page on a phone. Computers and tablets keep the row of tabs. The menu never
+   scrolls: compact rows, and two columns on short screens. */
 .menu-btn, .menu-backdrop { display: none; }
 @media (max-width: 640px) {
-  .pres-topbar { flex-wrap: nowrap; gap: 10px; padding-left: 10px; }
+  .pres-topbar { flex-wrap: nowrap; gap: 10px; padding: 10px; }
   .pres-topbar .brand { min-width: 0; flex: 1 1 auto; }
-  .pres-topbar .welcome { min-width: 0; }
-  .pres-topbar .welcome strong, .pres-topbar .welcome small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pres-topbar .access-badge { display: none; }
+  .hdr-title { gap: 8px; }
+  .hdr-title .access-badge { padding: 3px 8px; font-size: 10.5px; }
   .pres-topbar .btn-ghost { flex: 0 0 auto; white-space: nowrap; padding: 8px 11px; font-size: 12.5px; }
-  /* ☰ only on the On Air tab (body.desk-open); other tabs keep the buttons on top */
-  body.desk-open .menu-btn {
+  .welcome-line { padding: 10px 14px 0; font-size: 15px; }
+  body.desk-open .welcome-line { padding: 8px 10px 0; font-size: 14px; }
+  .menu-btn {
     display: inline-flex; flex-direction: column; justify-content: center; gap: 4px; position: relative;
     flex: 0 0 auto; width: 42px; height: 42px; padding: 0 11px; cursor: pointer;
     border-radius: 10px; border: 1px solid var(--glass-border); background: rgba(255, 255, 255, 0.06);
@@ -464,16 +476,32 @@ body.meet-sharing { overflow: hidden; }
   body.menu-open .menu-btn span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
   .menu-dot { position: absolute; top: 5px; right: 5px; width: 9px; height: 9px; border-radius: 50%; background: #3ecf8e; box-shadow: 0 0 0 2px #121214; }
   .menu-dot[hidden] { display: none; }
-  body.desk-open .portal-tabs {
-    position: fixed; top: 0; left: 0; bottom: 0; z-index: 60; width: min(78vw, 290px); max-width: none; margin: 0;
-    flex-direction: column; flex-wrap: nowrap; gap: 6px; padding: 18px 14px; overflow-y: auto;
-    background: #141416; border-right: 1px solid var(--glass-border); box-shadow: 8px 0 30px rgba(0, 0, 0, .6);
-    transform: translateX(-105%); transition: transform .25s ease;
+  /* the floating panel, just under the ☰ button */
+  .portal-tabs {
+    position: fixed; z-index: 60; top: 64px; left: 10px; margin: 0;
+    width: min(250px, calc(100vw - 20px)); max-width: none; max-height: calc(100vh - 80px);
+    display: grid; grid-template-columns: 1fr; gap: 4px; padding: 8px; overflow: hidden;
+    background: rgba(18, 18, 21, 0.72);
+    backdrop-filter: blur(24px) saturate(170%); -webkit-backdrop-filter: blur(24px) saturate(170%);
+    border: 1px solid rgba(212, 175, 55, 0.35); border-radius: 16px;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, .55);
+    opacity: 0; visibility: hidden; transform: translateY(-6px) scale(.98); transform-origin: top left;
+    transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
   }
-  body.desk-open.menu-open .portal-tabs { transform: none; }
-  body.desk-open .portal-tabs .ptab { width: 100%; text-align: left; border-radius: 12px; padding: 13px 14px; font-size: 15px; }
+  body.menu-open .portal-tabs { opacity: 1; visibility: visible; transform: none; transition: opacity .18s ease, transform .18s ease; }
+  .portal-tabs .ptab {
+    width: 100%; text-align: left; border-radius: 10px; padding: 10px 12px; font-size: 14px;
+    background: rgba(40, 40, 45, 0.55); color: var(--text); border-color: rgba(212, 175, 55, 0.22); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .portal-tabs .ptab.active { background: linear-gradient(135deg, #f1cf72, #d4af37); color: #231a08; border-color: transparent; font-weight: 800; }
   .portal-tabs .ptab[hidden] { display: none; }
-  body.desk-open .menu-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .55); }
+  .hdr-title .access-badge { display: none; }   /* phones: room for the job title */
+  /* a light veil behind it: tap anywhere outside to close */
+  .menu-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .18); }
   .menu-backdrop[hidden] { display: none; }
-  body.menu-open { overflow: hidden; }
+}
+/* short phone screens: two columns, so it still never scrolls */
+@media (max-width: 640px) and (max-height: 600px) {
+  .portal-tabs { grid-template-columns: 1fr 1fr; width: min(380px, calc(100vw - 20px)); }
+  .portal-tabs .ptab { padding: 8px 10px; font-size: 13px; }
 }

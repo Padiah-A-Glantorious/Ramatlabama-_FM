@@ -80,7 +80,7 @@
     portal.hidden = false;
 
     byId("welcomeName").textContent = "Welcome, " + me.name;
-    byId("welcomeTitle").textContent = me.title || "";
+    byId("welcomeTitle").textContent = me.title || accessLabel();   // job title next to the logo
     byId("accessBadge").textContent = accessLabel();
 
     // Manager-only tabs

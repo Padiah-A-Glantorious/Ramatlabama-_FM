@@ -1212,7 +1212,6 @@
     // The studio needs the whole width of the screen.
     document.querySelectorAll(".ptab").forEach((t) => t.addEventListener("click", () => {
       document.body.classList.toggle("desk-open", t.dataset.tab === "desk");
-      if (t.dataset.tab !== "desk") document.body.classList.remove("menu-open");   // ☰ only exists on On Air
       setTimeout(fitPhone, 60);
       if (t.dataset.tab === "desk") { tracksKey = ""; renderTracks(); setTimeout(() => { drawWave("A"); drawWave("B"); }, 50); }
     }));

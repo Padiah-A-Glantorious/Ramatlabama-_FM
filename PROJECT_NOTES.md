@@ -117,11 +117,12 @@ Writes are atomic; corrupt files are backed up (`*.corrupt-*.bak`), never wiped.
 
 ---
 
-## 9. Studio: calls and co-hosts (`studio.js`, `callpeer.js`, `call.js`)
+## 9. Calls and co-hosts (`studio.js`, `callpeer.js`, `call.js`), inside 🔴 On Air
 
-- **Host:** Studio tab → **Open the lines** (wear headphones). Then in Miradio click
-  **TAB**, pick the portal tab, tick **Also share tab audio**. The host's own voice goes
-  on air through Miradio's MIC; the portal tab plays everyone on the line.
+- **Host:** 🔴 On Air → **📞 Lines** panel → **Open the lines** (wear headphones). Callers
+  you put through go on air on the mixer's **CALLS** fader; your voice goes on air with
+  **TALK**. No Miradio needed. The waiting count shows on the On Air tab and on the
+  📞 LINES button in the top bar (tap it to jump to the Lines panel).
 - **Star mix:** every caller/co-host connects to the host's tab, which mixes them.
   **Mix-minus:** each person hears the host + the others, never themselves (no echo).
   Up to **8** people on the line; 40 can wait.

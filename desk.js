@@ -75,66 +75,42 @@
   function build(root) {
     root.innerHTML = `
     <div class="dk" id="dk">
-      <aside class="dk-side">
-        <section class="dk-card">
-          <div class="dk-label">BROADCAST CONTROLS</div>
-          <div class="dk-row4">
+      <div class="dk-main">
+        <!-- One bar: going live, recording, the show's status, the lines, TALK and settings -->
+        <header class="dk-card dk-top">
+          <div class="dk-transport">
             <button type="button" class="dk-btn dk-go" id="dkGo">GO LIVE</button>
             <button type="button" class="dk-btn" id="dkStop">STOP</button>
-            <button type="button" class="dk-btn dk-rec" id="dkRec" title="Record the whole show as an MP3">● REC</button>
-            <button type="button" class="dk-btn" id="dkReload">RELOAD</button>
-          </div>
-        </section>
-        <section class="dk-card dk-station" id="dkStation">
-          <div class="dk-label dk-accent">ACTIVE STATION</div>
-          <div class="dk-row">
-            <select id="dkTarget" aria-label="Where to broadcast">
-              <option value="famcast">Broadcast Live (Famcast)</option>
-              <option value="preview">Preview only (test)</option>
-            </select>
-            <button type="button" class="dk-icon" id="dkRefresh" title="Refresh">⟳</button>
+            <button type="button" class="dk-btn dk-rec" id="dkRec" title="Go live first to record">● REC</button>
           </div>
           <div class="dk-status" id="dkStatus">Off air</div>
-        </section>
-        <section class="dk-card">
-          <div class="dk-field"><span class="dk-label">SOURCE</span>
-            <select id="dkSource"><option value="all">Playlist</option><option value="station">Station music</option><option value="local">My files</option></select></div>
-          <label class="dk-toggle"><span>🎙 TALK-OVER</span><input type="checkbox" id="dkTalkover" checked /></label>
-          <label class="dk-toggle"><span>⏭ AUTO NEXT</span><input type="checkbox" id="dkAuto" /></label>
-        </section>
-        <section class="dk-card">
-          <div class="dk-label">AUDIO</div>
-          <div class="dk-label dk-sm">DECKS</div>
-          <select id="dkDecks"><option value="2">2 decks</option><option value="1">1 deck</option></select>
-          <div class="dk-label dk-sm">QUALITY</div>
-          <select id="dkQuality">
-            <option value="64">Low (64 kbps)</option><option value="96">Medium (96 kbps)</option>
-            <option value="128" selected>High (128 kbps)</option><option value="192">Very high (192 kbps)</option>
-          </select>
-          <div class="dk-label dk-sm">HEADPHONES</div>
-          <input type="range" id="dkMonitor" min="0" max="100" value="80" aria-label="Headphone level" />
-        </section>
-        <div class="dk-sidefoot">
-          <button type="button" class="dk-btn" id="dkUsage">USAGE</button>
-          <button type="button" class="dk-btn" id="dkListen" title="Hear what leaves the studio (a few seconds late)">LISTEN</button>
-        </div>
-      </aside>
-
-      <div class="dk-main">
-        <header class="dk-top">
-          <div class="dk-brand"><span class="dk-logo"><img src="assets/logo.webp" alt="" /></span><strong>RAMATLABAMA FM</strong><span class="dk-ver">STUDIO v1.0</span></div>
-          <div class="dk-audio"><small>AUDIO</small><canvas id="dkMaster" width="160" height="8"></canvas></div>
           <div class="dk-topbtns">
-            <button type="button" class="dk-pill" id="dkCalls" title="Open the call lines">📞 CALLS <b id="dkCallsN"></b></button>
+            <button type="button" class="dk-pill dk-linespill" id="dkCalls" title="Calls: open the lines, see who's waiting">📞 <span>LINES</span> <b id="dkCallsN"></b></button>
             <button type="button" class="dk-pill" id="dkTalk" title="Put your microphone on air">🎙 TALK</button>
+            <button type="button" class="dk-pill dk-gear" id="dkGear" title="Studio settings" aria-expanded="false">⚙</button>
             <span class="dk-wifi" id="dkWifi" title="Connection">●</span>
           </div>
         </header>
+        <!-- Settings you rarely change: hidden until ⚙ is pressed -->
+        <div class="dk-card dk-settings" id="dkSettings" hidden>
+          <label>Decks<select id="dkDecks"><option value="2">2 decks</option><option value="1">1 deck</option></select></label>
+          <label>Quality<select id="dkQuality">
+            <option value="64">Low (64 kbps)</option><option value="96">Medium (96 kbps)</option>
+            <option value="128" selected>High (128 kbps)</option><option value="192">Very high (192 kbps)</option>
+          </select></label>
+          <label>Headphones<input type="range" id="dkMonitor" min="0" max="100" value="80" aria-label="Headphone level" /></label>
+          <label class="dk-check"><input type="checkbox" id="dkTalkover" checked /> Music dips while I talk</label>
+          <div class="dk-setbtns">
+            <button type="button" class="dk-btn dk-smb" id="dkListen" title="Hear what leaves the studio (a few seconds late)">🎧 Listen</button>
+            <button type="button" class="dk-btn dk-smb" id="dkUsage">📊 Usage</button>
+            <button type="button" class="dk-btn dk-smb" id="dkReload">⟳ Reload</button>
+          </div>
+        </div>
 
         <div class="dk-decks" id="dkDecksRow">
           ${deckHtml("A")}
           <section class="dk-card dk-mixer">
-            <div class="dk-label">MIXER</div>
+            <div class="dk-mixhead"><span class="dk-label">MIXER</span><span class="dk-onair"><small>ON AIR</small><canvas id="dkMaster" width="160" height="8"></canvas></span></div>
             <div class="dk-faders">
               ${faderHtml("A", "CH A")}${faderHtml("B", "CH B")}${faderHtml("mic", "MIC")}${faderHtml("calls", "CALLS")}
             </div>
@@ -147,10 +123,40 @@
         </div>
 
         <div class="dk-bottom">
+          <!-- The call lines (studio.js fills these in: same ids as the old Studio tab) -->
+          <section class="dk-card dk-lines" id="dkLines">
+            <div class="dk-cartbar">
+              <div><strong>📞 Lines</strong><small id="hostStatus">Loading…</small></div>
+              <button type="button" class="btn-primary" id="hostToggleBtn">📞 Open the lines</button>
+            </div>
+            <div class="invite-row" id="inviteRow" hidden>
+              <select id="inviteSelect" aria-label="Choose a co-host"></select>
+              <button type="button" class="dk-btn dk-smb" id="inviteBtn">➕ Invite co-host</button>
+            </div>
+            <div id="inviteList"></div>
+            <div class="save-state" id="studioState"></div>
+            <div class="dk-cohost" id="cohostCard" hidden>
+              <div class="dk-cohostrow">
+                <div><strong>🎧 Co-host</strong><div class="save-state" id="cohostStatus"></div></div>
+                <div class="live-actions">
+                  <button type="button" class="dk-btn dk-smb" id="cohostMuteBtn">🔇 Mute my mic</button>
+                  <button type="button" class="btn-danger" id="cohostLeaveBtn">⏹ Leave</button>
+                </div>
+              </div>
+              <div class="meter" id="cohostMeterWrap"><div class="meter-bar" id="cohostMeter"></div></div>
+              <audio id="cohostAudio" autoplay></audio>
+            </div>
+            <div class="dk-label dk-linelab">WAITING</div>
+            <div class="call-queue" id="callQueue"><p class="dk-empty">No callers waiting.</p></div>
+            <div class="dk-label dk-linelab">ON THE LINE <span id="lineCount"></span></div>
+            <div id="lineList"><p class="dk-empty">Nobody on the line.</p></div>
+            <p class="dk-hint">🎧 Wear headphones. Callers you put through go on air on the CALLS fader. They hear you, the music and each other.</p>
+          </section>
           <section class="dk-card dk-list">
             <div class="dk-listbar">
               <input type="search" id="dkSearch" placeholder="Search tracks…" />
               <span class="dk-count" id="dkCount">0 / 0 tracks</span>
+              <label class="dk-btn dk-smb dk-auto" title="When a song ends, the next one starts on the other deck"><input type="checkbox" id="dkAuto" /> ⏭ Auto next</label>
               <button type="button" class="dk-btn dk-smb" id="dkClear">🗑 Clear</button>
               <label class="dk-btn dk-smb">⬆ Load Files<input type="file" id="dkFiles" accept="audio/*" multiple hidden /></label>
             </div>
@@ -179,6 +185,7 @@
         <div class="dk-msg" id="dkMsg" role="status"></div>
       </div>
     </div>`;
+    if (window.RFM_STUDIO && window.RFM_STUDIO.render) window.RFM_STUDIO.render();   // fill in the lines
   }
 
   function say(text, bad) {
@@ -473,8 +480,8 @@
     return list.length;
   }
   function visibleTracks() {
-    const src = byId("dkSource").value, q = byId("dkSearch").value.trim().toLowerCase();
-    return tracks.filter((t) => !hidden.has(t.key) && (src === "all" || t.source === src) &&
+    const q = byId("dkSearch").value.trim().toLowerCase();
+    return tracks.filter((t) => !hidden.has(t.key) &&
       (!q || t.title.toLowerCase().includes(q) || (t.sub || "").toLowerCase().includes(q)));
   }
   function freeDeck() {
@@ -708,7 +715,7 @@
     if (!recMime) return say("This browser can't broadcast. Use Chrome, Edge or Safari (iPhone: iOS 14.5 or newer).", true);
     if (!force && !wantLive && !confirm("Go live now? Everything on the mixer (decks, carts, TALK and CALLS) goes on air.")) return;
     wantLive = true;
-    send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: byId("dkTarget").value, force: !!force });
+    send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: "famcast", force: !!force });   // the server falls back to a preview if Famcast isn't set up
     renderLive();
   }
   function startRecorder() {
@@ -759,29 +766,29 @@
   function renderLive() {
     const s = state && state.live;
     const mine = !!(s && me && s.userId === me.id);
-    const go = byId("dkGo"), st = byId("dkStatus"), card = byId("dkStation");
+    const go = byId("dkGo"), st = byId("dkStatus"), top = document.querySelector(".dk-top");
     if (!go) return;
-    go.classList.toggle("on", mine && wantLive);
-    go.textContent = mine && wantLive ? "● ON AIR" : "GO LIVE";
-    card.classList.toggle("live", mine && wantLive);
-    card.classList.toggle("busy", !!s && !mine);
-    const tgt = byId("dkTarget");
-    if (state && !state.famcastReady) { tgt.value = "preview"; tgt.options[0].disabled = true; tgt.options[0].textContent = "Broadcast Live (Famcast) · not set up"; }
-    tgt.disabled = mine && wantLive;
-    byId("dkQuality").disabled = mine && wantLive;
+    const onAir = mine && wantLive;
+    go.classList.toggle("on", onAir);
+    go.textContent = onAir ? "● ON AIR" : "GO LIVE";
+    byId("dkStop").disabled = !onAir && !(mine && s);
+    top.classList.toggle("live", onAir);
+    top.classList.toggle("busy", !!s && !mine);
+    byId("dkQuality").disabled = onAir;
     let text = "Off air";
     if (s && !mine) text = "🔴 " + s.by + " is live right now.";
     else if (s && mine) {
       const since = fmt((Date.now() - s.since) / 1000);
       const where = s.target === "famcast"
         ? (s.famcast === "on" ? "Famcast connected" : s.famcast === "connecting" ? "connecting to Famcast…" : s.famcast === "error" ? "Famcast problem" : "starting…")
-        : "PREVIEW only (not on Famcast)";
-      text = "🔴 LIVE " + since + " · " + where + (s.receiving ? "" : " · waiting for audio…") + (s.error ? "\n" + s.error : "");
+        : "preview only (not on Famcast)";
+      text = "LIVE " + since + " · " + where + (s.receiving ? "" : " · waiting for audio…") + (s.error ? " · " + s.error : "");
     } else if (wantLive) text = "Starting…";
-    else if (state && !state.famcastReady) text = "Off air · Famcast isn't set up on this server, so GO LIVE runs a preview.";
-    if (s && mine && s.rec) text += "\n● Recording " + fmtMB(s.rec.bytes);
+    else if (state && !state.famcastReady) text = "Off air · Famcast isn't set up here, so GO LIVE runs a preview";
     st.textContent = text;
+    st.title = text;
     st.classList.toggle("bad", !!(s && mine && s.error));
+    st.classList.toggle("live", onAir && !(s && s.error));
     renderRec();
   }
   setInterval(renderLive, 1000);
@@ -793,7 +800,7 @@
     ws.onopen = () => {
       byId("dkWifi").classList.add("ok"); byId("dkWifi").title = "Connected";
       send({ type: "bc-hello", token });
-      if (wantLive) send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: byId("dkTarget").value });   // carry on after a blip
+      if (wantLive) send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: "famcast" });   // carry on after a blip
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") return;
@@ -867,8 +874,10 @@
     byId("dkStop").onclick = stopLive;
     byId("dkRec").onclick = toggleRec;
     byId("dkReload").onclick = () => { loadStationTracks(); loadCarts(); say("Playlist and carts reloaded."); };
-    byId("dkRefresh").onclick = () => send({ type: "bc-hello", token });
-    byId("dkSource").onchange = () => { tracksKey = ""; renderTracks(); };
+    byId("dkGear").onclick = () => {
+      const p = byId("dkSettings"), open = p.hidden;
+      p.hidden = !open; byId("dkGear").classList.toggle("open", open); byId("dkGear").setAttribute("aria-expanded", String(open));
+    };
     byId("dkSearch").oninput = renderTracks;
     byId("dkClear").onclick = () => {
       const n = tracks.filter((t) => t.source === "local").length;
@@ -879,7 +888,10 @@
     byId("dkFiles").onchange = (e) => { addLocalFiles(e.target.files); e.target.value = ""; };
     byId("dkCartSearch").oninput = renderCarts;
     byId("dkCartFile").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; addCart(f); };
-    byId("dkCalls").onclick = () => { const t = document.querySelector('.ptab[data-tab="studio"]'); if (t) t.click(); };
+    byId("dkCalls").onclick = () => {   // jump to the Lines panel (on phones it's further down)
+      const l = byId("dkLines"); l.scrollIntoView({ behavior: "smooth", block: "start" });
+      l.classList.remove("flash"); void l.offsetWidth; l.classList.add("flash");
+    };
     byId("dkUsage").onclick = () => {
       const s = state && state.live;
       if (!s || s.userId !== me.id) return say("Not live. Usage shows here while you broadcast.");
@@ -900,8 +912,12 @@
       document.body.classList.toggle("desk-open", t.dataset.tab === "desk");
       if (t.dataset.tab === "desk") { tracksKey = ""; renderTracks(); setTimeout(() => { drawWave("A"); drawWave("B"); }, 50); }
     }));
-    // Calls waiting (from the Studio tab's badge).
-    setInterval(() => { const q = byId("queueCount"); byId("dkCallsN").textContent = q ? q.textContent : ""; }, 1500);
+    // Callers waiting (studio.js keeps the count on the On Air tab's badge).
+    setInterval(() => {
+      const q = byId("queueCount"), n = q ? q.textContent : "";
+      byId("dkCallsN").textContent = n;
+      byId("dkCalls").classList.toggle("ringing", !!n);
+    }, 1000);
     renderChips();
   }
 
@@ -919,5 +935,6 @@
       connect();
     },
     busy() { return wantLive; },
+    wake,   // studio.js: start the audio engine before opening the lines, so callers reach the CALLS fader
   };
 })();

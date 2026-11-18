@@ -69,11 +69,9 @@
   /* ================= hosting: the mixing desk ================= */
   async function startHosting() {
     if (co) return toast("Leave your co-host call first.", true);
-    const deskNote = window.RFM_AUDIO && window.RFM_AUDIO.desk
-      ? "Callers go on air through the CALLS fader in the 🔴 On Air studio."
-      : "Then share this tab into Miradio with TAB (tick 'Also share tab audio'), or use the 🔴 On Air studio.";
-    if (!confirm("Open the lines and host?\n\nWear HEADPHONES. Speakers would feed callers back into your microphone and onto the air (echo).\n\n" + deskNote)) return;
+    if (!confirm("Open the lines and take calls?\n\nWear HEADPHONES. Speakers would feed callers back into your microphone and onto the air (echo).\n\nCallers you put through go on air on the CALLS fader.")) return;
     try {
+      if (window.RFM_DESK && window.RFM_DESK.wake) await window.RFM_DESK.wake();   // the studio's mixer must be running first
       ctx = await window.RFM_AUDIO.resume();          // shared with the On Air studio
       hostMic = await window.RFM_AUDIO.mic();
       micHeld = true;
@@ -238,6 +236,7 @@
   function answer() {
     const v = myInvite(); if (!v) return;
     ring(null);
+    const t = document.querySelector('.ptab[data-tab="desk"]'); if (t && !t.classList.contains("active")) t.click();   // co-host controls are in 🔴 On Air
     startCohost(v.id);
   }
   function decline() {
@@ -319,19 +318,17 @@
     const h = snap && snap.host;
     btn.hidden = false; btn.disabled = false;
     if (hosting) {
-      st.textContent = (window.RFM_AUDIO.desk
-        ? "You're hosting from this tab. Callers go on air through the CALLS fader in 🔴 On Air."
-        : "You're hosting from this tab. Share it into Miradio with TAB so callers go on air, or open 🔴 On Air.") + (h && !h.connected ? " (Reconnecting…)" : "");
+      st.textContent = "The lines are open. Put callers through and they go on air on the CALLS fader." + (h && !h.connected ? " (Reconnecting…)" : "");
       btn.textContent = "⏹ Close the lines"; btn.className = "btn-danger";
     } else if (h && me && h.userId === me.id) {
-      st.textContent = "You're hosting from another tab or device.";
-      btn.textContent = "🎙 Host from this tab instead"; btn.className = "btn-primary";
+      st.textContent = "You have the lines open on another tab or device.";
+      btn.textContent = "📞 Take the lines here"; btn.className = "btn-primary";
     } else if (h) {
       st.textContent = h.name + " is hosting." + (h.connected ? "" : " (Their studio tab is reconnecting.)") + (coLive() ? "" : " They can invite you to co-host.");
       btn.hidden = true;
     } else {
       st.textContent = "The lines are closed. Open them to take calls and co-hosts.";
-      btn.textContent = "🎙 Open the lines (I'm hosting)"; btn.className = "btn-primary";
+      btn.textContent = "📞 Open the lines"; btn.className = "btn-primary";
       btn.disabled = !!co;
     }
   }
@@ -444,5 +441,6 @@
     },
     // True while this tab hosts the lines or is on air as a co-host (never auto-refresh then).
     busy() { return !!hosting || !!co; },
+    render() { render(); },   // the On Air tab built the Lines panel: fill it in
   };
 })();

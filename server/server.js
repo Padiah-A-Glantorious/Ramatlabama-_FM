@@ -1486,6 +1486,14 @@ const httpServer = http.createServer(async (req, res) => {
   /* ---- static files ---- */
   let filePath = path.normalize(path.join(SITE_DIR, decodeURIComponent(reqPath === "/" ? "/index.html" : reqPath)));
   if (!filePath.startsWith(SITE_DIR)) { res.writeHead(403); res.end("Forbidden"); return; }
+  // Only the website itself is public: the pages, scripts and styles in the top folder, and
+  // assets/. Never the server code, member import lists, notes, git data or dotfiles.
+  {
+    const parts = path.relative(SITE_DIR, filePath).split(path.sep);
+    const top = parts.length === 1 && /^[\w-]+\.(html|js|css|ico|png|webp|svg|jpg)$/i.test(parts[0]);
+    const asset = parts[0] === "assets" && parts.length > 1 && !parts.some((x) => x.startsWith("."));
+    if (!top && !asset) { res.writeHead(404); res.end("Not found"); return; }
+  }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end("Not found"); return; }
     const ext = path.extname(filePath).toLowerCase();

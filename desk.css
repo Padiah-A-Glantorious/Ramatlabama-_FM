@@ -50,7 +50,27 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 .dk-transport { display: flex; gap: 8px; flex: 0 0 auto; }
 .dk-transport .dk-btn { min-width: 92px; padding: 11px 14px; font-size: 12px; }
 .dk-go { color: var(--calls); border-color: rgba(62, 207, 142, 0.45); background: rgba(62, 207, 142, 0.08); }
-.dk-go.on { color: #fff; background: var(--live); border-color: var(--live); animation: dkPulse 1.6s infinite; }
+.dk-go.on { color: #fff; background: #d92d2d; border-color: var(--live); letter-spacing: 2px; }
+/* the red circle that blinks next to LIVE while you're on air */
+.dk-livedot { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 14px; align-self: center; background: #3a3a3e; border: 1px solid var(--dk-line2); }
+.dk-livedot.on { background: var(--live); border-color: var(--live); box-shadow: 0 0 10px var(--live); animation: dkBlinkDot 1s steps(2, start) infinite; }
+@keyframes dkBlinkDot { 50% { opacity: .15; box-shadow: none; } }
+/* microphone: grey when off, green when on air */
+.dk-micgroup { display: inline-flex; align-items: stretch; }
+.dk-mic {
+  cursor: pointer; width: 46px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px 0 0 999px; border: 1px solid var(--dk-line2); border-right: 0; background: #161618; color: var(--faint);
+}
+.dk-mic:hover { color: var(--text); }
+.dk-mic.on { background: #1e9e5f; color: #fff; border-color: #2fd081; box-shadow: 0 0 14px rgba(62, 207, 142, .45); }
+.dk-micpick {
+  cursor: pointer; width: 26px; height: 38px; border-radius: 0 999px 999px 0; border: 1px solid var(--dk-line2);
+  background: #161618; color: var(--muted); font-size: 11px; padding: 0 6px 0 2px;
+}
+.dk-mic.on + .dk-micpick { border-color: #2fd081; }
+.dk-micsel { min-width: 220px !important; }
+.dk-micsel small { font-size: 10.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--faint); }
+.dk-micsel small:empty { display: none; }
 @keyframes dkPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 77, .55); } 50% { box-shadow: 0 0 0 7px rgba(255, 77, 77, 0); } }
 .dk-status { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dk-status.live { color: #ffb3ab; font-weight: 700; }
@@ -250,6 +270,9 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
   .dk-transport .dk-btn { flex: 1 1 0; min-width: 0; padding: 12px 6px; }
   .dk-topbtns { flex: 1 1 100%; justify-content: space-between; }
   .dk-topbtns .dk-pill { flex: 1 1 auto; text-align: center; }
+  .dk-transport .dk-livedot { flex: 0 0 12px; width: 12px; height: 12px; }
+  .dk-micgroup { flex: 1 1 auto; }
+  .dk-mic { flex: 1 1 auto; width: auto; }
   .dk-status { order: 2; text-align: center; }
   .dk-topbtns { order: 3; }
   .dk-settings label { min-width: 0; flex: 1 1 140px; }

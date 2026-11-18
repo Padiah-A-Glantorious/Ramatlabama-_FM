@@ -112,6 +112,15 @@
     if (!desk || !p.dest) return;
     try { if (on) desk.musicOut.connect(p.dest); else desk.musicOut.disconnect(p.dest); } catch (_) {}
   }
+  // The presenter picked another microphone: callers hear the new one at once.
+  window.RFM_AUDIO.onMicChange((stream) => {
+    if (!hosting || !ctx || !micSrc) return;
+    const old = micSrc;
+    micSrc = ctx.createMediaStreamSource(stream);
+    hostMic = stream;
+    peers.forEach((p) => { if (p.dest) { try { old.disconnect(p.dest); } catch (_) {} micSrc.connect(p.dest); } });
+    try { old.disconnect(); } catch (_) {}
+  });
   window.RFM_AUDIO.onDesk((desk) => {
     routeMaster();
     if (desk) peers.forEach((p) => feedMusic(p, true));

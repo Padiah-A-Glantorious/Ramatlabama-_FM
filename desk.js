@@ -79,6 +79,7 @@
         <!-- One bar: going live, recording, the show's status, the lines, TALK and settings -->
         <header class="dk-card dk-top">
           <div class="dk-transport">
+            <span class="dk-livedot" id="dkLiveDot" aria-hidden="true"></span>
             <button type="button" class="dk-btn dk-go" id="dkGo">GO LIVE</button>
             <button type="button" class="dk-btn" id="dkStop">STOP</button>
             <button type="button" class="dk-btn dk-rec" id="dkRec" title="Go live first to record">● REC</button>
@@ -86,13 +87,19 @@
           <div class="dk-status" id="dkStatus">Off air</div>
           <div class="dk-topbtns">
             <button type="button" class="dk-pill dk-linespill" id="dkCalls" title="Calls: open the lines, see who's waiting">📞 <span>LINES</span> <b id="dkCallsN"></b></button>
-            <button type="button" class="dk-pill" id="dkTalk" title="Put your microphone on air">🎙 TALK</button>
+            <span class="dk-micgroup">
+              <button type="button" class="dk-mic" id="dkTalk" aria-pressed="false" aria-label="Microphone" title="Microphone off. Tap to talk on air.">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V5.5a3.5 3.5 0 0 0-7 0V11a3.5 3.5 0 0 0 3.5 3.5zm6-3.5a6 6 0 0 1-12 0H4.2a7.8 7.8 0 0 0 6.9 7.75V22h1.8v-3.25A7.8 7.8 0 0 0 19.8 11H18z"/></svg>
+              </button>
+              <button type="button" class="dk-micpick" id="dkMicPick" title="Choose which microphone to use" aria-label="Choose microphone">▾</button>
+            </span>
             <button type="button" class="dk-pill dk-gear" id="dkGear" title="Studio settings" aria-expanded="false">⚙</button>
             <span class="dk-wifi" id="dkWifi" title="Connection">●</span>
           </div>
         </header>
         <!-- Settings you rarely change: hidden until ⚙ is pressed -->
         <div class="dk-card dk-settings" id="dkSettings" hidden>
+          <label class="dk-micsel">Microphone<select id="dkMicSel" aria-label="Microphone"><option value="">Default microphone</option></select><small id="dkMicNote"></small></label>
           <label>Decks<select id="dkDecks"><option value="2">2 decks</option><option value="1">1 deck</option></select></label>
           <label>Quality<select id="dkQuality">
             <option value="64">Low (64 kbps)</option><option value="96">Medium (96 kbps)</option>
@@ -258,10 +265,43 @@
       micSrc = null; micOn = false;
       if (micHeld) { window.RFM_AUDIO.releaseMic(); micHeld = false; }
     }
-    byId("dkTalk").classList.toggle("on", micOn);
-    byId("dkTalk").textContent = micOn ? "🎙 TALK · ON AIR" : "🎙 TALK";
+    const b = byId("dkTalk");
+    b.classList.toggle("on", micOn);
+    b.setAttribute("aria-pressed", String(micOn));
+    b.title = micOn ? "Microphone ON (on air). Tap to switch it off." : "Microphone off. Tap to talk on air.";
     applyDuck();
+    if (micOn) fillMics();   // names of the mics show once the site may use one
   }
+  // Another microphone was chosen while it's open: the MIC fader gets the new one.
+  window.RFM_AUDIO.onMicChange((stream) => {
+    if (!micOn || !N) return;
+    const old = micSrc;
+    micSrc = N.ctx.createMediaStreamSource(stream); micSrc.connect(N.mic);
+    try { old.disconnect(); } catch (_) {}
+  });
+
+  /* ================= choosing the microphone ================= */
+  async function fillMics() {
+    const sel = byId("dkMicSel"); if (!sel) return;
+    const list = await window.RFM_AUDIO.devices();
+    const cur = window.RFM_AUDIO.deviceId();
+    const named = list.some((d) => d.label);
+    sel.innerHTML = "";
+    const def = el("option", null, "Default microphone"); def.value = ""; sel.appendChild(def);
+    list.filter((d) => d.deviceId && d.deviceId !== "default" && d.deviceId !== "communications").forEach((d, i) => {
+      const o = el("option", null, d.label || "Microphone " + (i + 1)); o.value = d.deviceId; sel.appendChild(o);
+    });
+    sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "";
+    byId("dkMicNote").textContent = named ? "" : "Switch the mic on once to see their names.";
+  }
+  async function chooseMic(id) {
+    try {
+      await window.RFM_AUDIO.setDevice(id);
+      const label = window.RFM_AUDIO.currentLabel() || byId("dkMicSel").selectedOptions[0].textContent;
+      say("🎙 Using " + label + (window.RFM_AUDIO.isMicOpen() ? "." : " next time the mic opens."));
+    } catch (_) { say("That microphone couldn't be opened. Check it's plugged in.", true); fillMics(); }
+  }
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", () => fillMics());
 
   /* ================= decks ================= */
   function makeDeck(D) {
@@ -628,24 +668,93 @@
     const show = showNow();
     return (show ? show + " · " : "") + (me && me.name ? me.name + " · " : "") + stamp;
   }
-  // Recording only ever starts when you press ● REC while you're live. Never by itself.
+  // Recording only ever starts when you press ● REC. Never by itself.
+  //  - Live: the server records the exact MP3 going on air (saved when you stop REC or go off air).
+  //  - Not live: the mixer is recorded on its own connection (nothing goes to listeners).
+  //    Going live meanwhile doesn't interrupt it.
+  let solo = null;   // { ws, rec, since, stopping, chain }
   async function toggleRec() {
+    if (solo) {
+      if (!confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
+      return stopSolo();
+    }
+    if (!shows) await loadShows();
     const s = state && state.live;
-    if (!isMineLive()) return say("Go live first, then press ● REC to record the show.", true);
-    const on = !(s && s.rec);
-    if (!on && !confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
-    if (on && !shows) await loadShows();
-    send({ type: "bc-record", token, on, title: recTitle() });
-    if (on) say("● Recording the show. It's saved as an MP3 when you press REC again or go off air.");
+    if (isMineLive()) {
+      const on = !(s && s.rec);
+      if (!on && !confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
+      send({ type: "bc-record", token, on, title: recTitle() });
+      if (on) say("● Recording the show. It's saved as an MP3 when you press REC again or go off air.");
+      return;
+    }
+    startSolo();
+  }
+  async function startSolo() {
+    await wake();
+    const mime = pickMime();
+    if (!mime) return say("This browser can't record. Use Chrome, Edge or Safari.", true);
+    const sws = new WebSocket(wsUrl);
+    sws.binaryType = "arraybuffer";
+    const me0 = solo = { ws: sws, rec: null, since: 0, stopping: false, chain: Promise.resolve() };
+    sws.onopen = () => sws.send(JSON.stringify({ type: "rec-solo-start", token, title: recTitle(), kbps: Number(byId("dkQuality").value) }));
+    sws.onmessage = (ev) => {
+      if (typeof ev.data !== "string") return;
+      let d; try { d = JSON.parse(ev.data); } catch { return; }
+      if (d.type === "rec-solo-ok" && solo === me0 && !me0.rec) {
+        let r;
+        try { r = new MediaRecorder(N.out.stream, { mimeType: mime, audioBitsPerSecond: Math.max(96, Number(byId("dkQuality").value)) * 1000 }); }
+        catch (_) { try { r = new MediaRecorder(N.out.stream); } catch (e) { say("This browser can't record the mix.", true); sws.close(); return; } }
+        me0.rec = r; me0.since = Date.now();
+        r.ondataavailable = (e) => {
+          if (!e.data || !e.data.size) return;
+          me0.chain = me0.chain.then(() => e.data.arrayBuffer()).then((b) => { if (sws.readyState === 1) sws.send(b); }).catch(() => {});
+        };
+        r.onstop = () => { me0.chain.then(() => { if (sws.readyState === 1) sws.send(JSON.stringify({ type: "rec-solo-stop", token })); }); };
+        r.start(250);
+        keepAwake(true);
+        say("● Recording (not live). Nothing goes to listeners. Press ● REC again to stop and save.");
+        renderRec();
+      } else if (d.type === "bc-recorded") {
+        say("✓ Recording saved: " + d.rec.title + " (" + fmt(d.rec.secs) + ", " + fmtMB(d.rec.size) + "). Download it under Recordings.");
+        loadRecs();
+        try { sws.close(); } catch (_) {}
+      } else if (d.type === "bc-note") { say(d.text, !!d.bad); if (d.bad && !me0.rec) { try { sws.close(); } catch (_) {} } }
+      else if (d.type === "bc-error") { say(d.error, true); try { sws.close(); } catch (_) {} }
+    };
+    sws.onclose = () => {
+      if (me0.rec && me0.rec.state !== "inactive") { try { me0.rec.stop(); } catch (_) {} }
+      if (solo === me0) {
+        solo = null;
+        if (!me0.stopping && me0.rec) say("The recording connection dropped. What was recorded up to now is saved.", true);
+        if (!wantLive) keepAwake(false);
+        renderRec();
+      }
+    };
+    sws.onerror = () => { try { sws.close(); } catch (_) {} };
+    renderRec();
+  }
+  function stopSolo() {
+    const s = solo; if (!s) return;
+    s.stopping = true;
+    if (s.rec && s.rec.state !== "inactive") { try { s.rec.stop(); } catch (_) { s.ws.close(); } }   // onstop sends the last audio, then "stop"
+    else { try { s.ws.close(); } catch (_) {} }
+    setTimeout(() => { try { s.ws.close(); } catch (_) {} }, 20000);   // the server answers long before this
+    solo = null;
+    if (!wantLive) keepAwake(false);
+    say("Saving the recording…");
+    renderRec();
   }
   function renderRec() {
     const b = byId("dkRec"); if (!b) return;
     const s = state && state.live;
-    const rec = isMineLive() && s && s.rec;
-    b.classList.toggle("on", !!rec);
-    b.disabled = !isMineLive();
-    b.textContent = rec ? "● REC " + fmt((Date.now() - s.rec.since) / 1000) : "● REC";
-    b.title = rec ? "Recording: " + fmtMB(s.rec.bytes) + " so far. Tap to stop and save it." : isMineLive() ? "Record the show as an MP3" : "Go live first to record";
+    const liveRec = isMineLive() && s && s.rec;
+    const since = solo && solo.since ? solo.since : liveRec ? s.rec.since : 0;
+    const rec = !!since || !!(solo && !solo.since);
+    b.classList.toggle("on", rec);
+    b.disabled = false;
+    b.textContent = since ? "● REC " + fmt((Date.now() - since) / 1000) : rec ? "● REC…" : "● REC";
+    b.title = rec ? "Recording" + (liveRec ? ": " + fmtMB(s.rec.bytes) + " so far" : solo ? " (not live)" : "") + ". Tap to stop and save it."
+      : isMineLive() ? "Record the show as an MP3" : "Record the mixer as an MP3 (nothing goes to listeners)";
   }
   async function loadRecs() {
     try {
@@ -746,7 +855,7 @@
     if (!confirm("Stop the broadcast? Listeners go back to the fill-in music." + (recording ? "\n\nThe recording is saved as an MP3." : ""))) return;
     wantLive = false;
     send({ type: "bc-stop", token });
-    stopRecorder(); keepAwake(false); renderLive();
+    stopRecorder(); if (!solo) keepAwake(false); renderLive();   // an off-air recording keeps going
   }
   async function keepAwake(on) {
     try {
@@ -761,7 +870,7 @@
       if (wasHiddenLive && wantLive) { wasHiddenLive = false; say("Keep this screen open while you're live. Phones may pause the broadcast in the background.", true); }
     }
   });
-  window.addEventListener("beforeunload", (e) => { if (wantLive) { e.preventDefault(); e.returnValue = ""; } });
+  window.addEventListener("beforeunload", (e) => { if (wantLive || solo) { e.preventDefault(); e.returnValue = ""; } });
 
   function renderLive() {
     const s = state && state.live;
@@ -770,7 +879,8 @@
     if (!go) return;
     const onAir = mine && wantLive;
     go.classList.toggle("on", onAir);
-    go.textContent = onAir ? "● ON AIR" : "GO LIVE";
+    go.textContent = onAir ? "LIVE" : "GO LIVE";
+    byId("dkLiveDot").classList.toggle("on", onAir);
     byId("dkStop").disabled = !onAir && !(mine && s);
     top.classList.toggle("live", onAir);
     top.classList.toggle("busy", !!s && !mine);
@@ -874,10 +984,13 @@
     byId("dkStop").onclick = stopLive;
     byId("dkRec").onclick = toggleRec;
     byId("dkReload").onclick = () => { loadStationTracks(); loadCarts(); say("Playlist and carts reloaded."); };
-    byId("dkGear").onclick = () => {
-      const p = byId("dkSettings"), open = p.hidden;
-      p.hidden = !open; byId("dkGear").classList.toggle("open", open); byId("dkGear").setAttribute("aria-expanded", String(open));
+    const setSettings = (open) => {
+      byId("dkSettings").hidden = !open; byId("dkGear").classList.toggle("open", open); byId("dkGear").setAttribute("aria-expanded", String(open));
+      if (open) fillMics();
     };
+    byId("dkGear").onclick = () => setSettings(byId("dkSettings").hidden);
+    byId("dkMicPick").onclick = () => { setSettings(true); byId("dkMicSel").focus(); };
+    byId("dkMicSel").onchange = (e) => chooseMic(e.target.value);
     byId("dkSearch").oninput = renderTracks;
     byId("dkClear").onclick = () => {
       const n = tracks.filter((t) => t.source === "local").length;
@@ -934,7 +1047,7 @@
       loadStationTracks(); loadCarts(); loadRecs(); loadShows();
       connect();
     },
-    busy() { return wantLive; },
+    busy() { return wantLive || !!solo; },
     wake,   // studio.js: start the audio engine before opening the lines, so callers reach the CALLS fader
   };
 })();

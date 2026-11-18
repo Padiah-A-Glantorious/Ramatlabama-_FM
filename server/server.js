@@ -1655,7 +1655,7 @@ wss.on("connection", (ws) => {
   ws.on("message", (raw, isBinary) => {
     if (isBinary) return bcm.onBinary(ws, raw);   // audio from the On Air studio
     let d; try { d = JSON.parse(raw.toString()); } catch { return; }
-    if (typeof d.type === "string" && d.type.startsWith("bc-")) return bcm.onWs(ws, d);
+    if (typeof d.type === "string" && (d.type.startsWith("bc-") || d.type.startsWith("rec-solo-"))) return bcm.onWs(ws, d);
 
     // Presenter/manager action: clear the chat history for everyone.
     if (d.type === "clear") {

@@ -153,18 +153,88 @@ module.exports = function setupBroadcast(h) {
     if (!bc || !bc.rec) return null;
     const r = bc.rec; bc.rec = null;
     const show = bc;
-    r.out.end(() => {
-      let size = r.bytes;
-      try { size = fs.statSync(path.join(REC_DIR, r.file)).size; } catch (_) {}
-      if (size < 2000) { try { fs.unlinkSync(path.join(REC_DIR, r.file)); } catch (_) {} return; }   // nothing was recorded
-      const item = { id: r.id, file: r.file, title: r.title, by: r.by, byName: r.byName, start: r.start, end: Date.now(), size, kbps: r.kbps };
-      recs.items.unshift(item); saveRecs(); recSeq = Date.now();
-      if (show.ws) sendTo(show.ws, { type: "bc-recorded", rec: recView(item, show.ws.bcViewer) });
-      push();
-    });
+    r.out.end(() => listRecording(r, show.ws));
     return r;
   }
+  // A recording's file is closed: add it to the list (or drop it if almost nothing was recorded).
+  function listRecording(r, ws) {
+    let size = r.bytes;
+    try { size = fs.statSync(path.join(REC_DIR, r.file)).size; } catch (_) {}
+    if (size < 2000) { try { fs.unlinkSync(path.join(REC_DIR, r.file)); } catch (_) {} return; }
+    const item = { id: r.id, file: r.file, title: r.title, by: r.by, byName: r.byName, start: r.start, end: Date.now(), size, kbps: r.kbps };
+    recs.items.unshift(item); saveRecs(); recSeq = Date.now();
+    if (ws) sendTo(ws, { type: "bc-recorded", rec: recView(item) });
+    push();
+  }
   const recView = (r) => ({ id: r.id, title: r.title, by: r.by, byName: r.byName, start: r.start, end: r.end, size: r.size, kbps: r.kbps, secs: Math.round((r.end - r.start) / 1000) });
+  function newRecFile(title, fallbackName) {
+    const start = Date.now(), stamp = saStamp(start);
+    const id = "rec" + start.toString(36) + rid(3);
+    const file = "show-" + stamp.replace(/[^0-9]/g, "").slice(0, 12) + "-" + id + ".mp3";
+    const out = fs.createWriteStream(path.join(REC_DIR, file));
+    return { id, file, out, start, bytes: 0, title: sanitize(title, 80).trim() || (fallbackName + " · " + stamp) };
+  }
+
+  /* ---------------- REC while NOT live: a recording-only session ----------------
+     The studio sends its mix over a separate connection. It's turned into MP3 and
+     saved to Recordings; nothing goes to Famcast or to listeners. If the presenter
+     goes live meanwhile, this recording simply carries on. */
+  const solos = new Set();
+  const SOLO_MAX = 6;
+  function soloStart(ws, u, d) {
+    if (ws.solo) return sendTo(ws, { type: "rec-solo-ok", since: ws.solo.start });
+    if (solos.size >= SOLO_MAX) return sendTo(ws, { type: "bc-note", bad: true, text: "Too many studios are recording right now. Try again in a minute." });
+    if (recUsed() >= REC_MAX_TOTAL) return sendTo(ws, { type: "bc-note", bad: true, text: "Recording storage is full. Delete old recordings first." });
+    const kbps = QUALITIES.includes(Number(d.kbps)) ? Number(d.kbps) : 128;
+    let f;
+    try { f = newRecFile(d.title, sanitize(u.name, 40)); } catch (_) { return sendTo(ws, { type: "bc-note", bad: true, text: "Couldn't start the recording on the server." }); }
+    const s = { ...f, ws, by: u.id, byName: sanitize(u.name, 40), kbps, ff: null, done: false };
+    f.out.on("error", () => { soloStop(s, "The recording stopped: the server couldn't write it."); });
+    solos.add(s); ws.solo = s;
+    sendTo(ws, { type: "rec-solo-ok", since: s.start });
+  }
+  function soloEncoder(s) {
+    const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "2", "-ar", "44100",
+      "-c:a", "libmp3lame", "-b:a", s.kbps + "k", "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "pipe:1"];
+    let ff;
+    try { ff = spawn(FFMPEG, args, { stdio: ["pipe", "pipe", "pipe"] }); } catch (_) { return null; }
+    ff.stdin.on("error", () => {});
+    ff.stderr.on("data", () => {});
+    ff.stdout.on("data", (c) => {
+      if (s.done && !s.closing) return;
+      s.bytes += c.length;
+      try { s.out.write(c); } catch (_) {}
+      if (recUsed() + s.bytes > REC_MAX_TOTAL) soloStop(s, "Recording storage is full, so the recording stopped and was saved.");
+    });
+    ff.on("error", () => { if (s.ff === ff) { s.ff = null; soloStop(s, "The audio encoder (ffmpeg) isn't available on the server."); } });
+    ff.on("close", () => { if (s.ff === ff) s.ff = null; if (s.closing) soloClose(s); });
+    return ff;
+  }
+  function soloStop(s, note) {   // finish encoding what's left, then save
+    if (s.done) return;
+    s.done = true; s.closing = true;
+    solos.delete(s);
+    if (s.ws && s.ws.solo === s) s.ws.solo = null;
+    if (note && s.ws) sendTo(s.ws, { type: "bc-note", bad: true, text: note });
+    if (s.ff) { try { s.ff.stdin.end(); } catch (_) {} setTimeout(() => { if (s.ff) { try { s.ff.kill("SIGKILL"); } catch (_) {} } }, 5000); }
+    else soloClose(s);
+  }
+  function soloClose(s) {
+    if (s.closed) return;
+    s.closed = true;
+    s.out.end(() => listRecording(s, s.ws));
+  }
+
+  function onWs(ws, d) {
+    if (d.type === "rec-solo-start" || d.type === "rec-solo-stop") {
+      const u = d.token ? userFromToken(String(d.token)) : null;
+      if (!u) return sendTo(ws, { type: "bc-error", error: "Log in again to record." });
+      if (d.type === "rec-solo-start") soloStart(ws, u, d);
+      else if (ws.solo) soloStop(ws.solo);
+      return;
+    }
+    return onWsMain(ws, d);
+  }
 
   /* ---------------- Famcast (Icecast source over HTTP PUT) ---------------- */
   function iceWrite(chunk) {
@@ -242,7 +312,7 @@ module.exports = function setupBroadcast(h) {
     else if (bc) pushSoon();   // keeps the byte counters and "receiving" fresh on screen
   }, 3000);
 
-  function onWs(ws, d) {
+  function onWsMain(ws, d) {
     if (d.type === "bc-hello") {
       const u = d.token ? userFromToken(String(d.token)) : null;
       if (!u) return sendTo(ws, { type: "bc-error", error: "Log in again." });
@@ -290,12 +360,20 @@ module.exports = function setupBroadcast(h) {
     }
   }
   function onBinary(ws, buf) {
+    if (ws.solo) {   // a recording-only session (REC while not live)
+      const s = ws.solo;
+      if (!buf || buf.length > MAX_CHUNK || s.done) return;
+      if (!s.ff && !(s.ff = soloEncoder(s))) return soloStop(s, "The audio encoder (ffmpeg) isn't available on the server.");
+      try { s.ff.stdin.write(buf); } catch (_) {}
+      return;
+    }
     if (!bc || bc.ws !== ws || !buf || buf.length > MAX_CHUNK) return;
     if (!bc.ff && !startFfmpeg()) return;
     bc.bytesIn += buf.length; bc.lastData = Date.now();
     try { bc.ff.stdin.write(buf); } catch (_) {}
   }
   function onClose(ws) {
+    if (ws.solo) soloStop(ws.solo);   // the studio closed or lost its connection: save what was recorded
     if (bc && bc.ws === ws) { bc.ws = null; bc.goneAt = Date.now(); stopFfmpeg(); push(); }
   }
 

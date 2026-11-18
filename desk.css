@@ -481,3 +481,71 @@ body.desk-open .portal-body { background: transparent; }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 1px 2px rgba(0, 0, 0, .7);
 }
 .dk-lines .add-btn, .dk-lines .m-btn, .dk-lines .btn-danger:not(#hostToggleBtn) { border-radius: 6px; }
+
+/* ============================================================
+   PHONES: one section of the studio at a time (like the Miradio app)
+   Bottom tabs: Deck · Playlist · Jingles · Lines · Records · Settings.
+   Deck has an A | B | MIXER switch. GO LIVE / STOP / REC and the mic stay on top.
+   Computers: none of this shows, everything is on one screen as before.
+   ============================================================ */
+.dk-msub, .dk-mnav { display: none; }
+@media (max-width: 640px) {
+  .dk { padding: 8px 8px calc(84px + env(safe-area-inset-bottom, 0px)); }
+  /* top bar: Lines and ⚙ are bottom tabs now */
+  #dkCalls, #dkGear { display: none; }
+  .dk-topbtns { gap: 8px; }
+  .dk-micgroup { flex: 1 1 auto; }
+  .dk-mic { flex: 1 1 auto; width: auto; height: 42px; }
+  .dk-micpick { height: 42px; }
+  /* show only the chosen section */
+  .dk:not([data-sec="deck"]) .dk-decks, .dk:not([data-sec="deck"]) .dk-msub { display: none !important; }
+  .dk:not([data-sec="list"]) .dk-list,
+  .dk:not([data-sec="carts"]) .dk-carts,
+  .dk:not([data-sec="lines"]) .dk-lines,
+  .dk:not([data-sec="recs"]) .dk-recs { display: none !important; }
+  .dk:not([data-sec="settings"]) .dk-settings { display: none !important; }
+  .dk[data-sec="settings"] .dk-settings { display: flex !important; flex-direction: column; align-items: stretch; }
+  .dk[data-sec="settings"] .dk-settings { gap: 16px; }
+  .dk[data-sec="settings"] .dk-settings label { width: 100%; flex: 0 0 auto; }
+  .dk[data-sec="settings"] .dk-setbtns .dk-btn { padding: 11px 6px; }
+  .dk[data-sec="deck"] .dk-bottom { display: none; }
+  .dk-lines { position: static; }
+  .dk-tracks, .dk-cartgrid, .dk-reclist { max-height: none; }
+  .dk-cartgrid { grid-template-columns: repeat(2, 1fr); }
+  .dk-cart { min-height: 78px; }
+  /* one deck or the mixer at a time */
+  .dk[data-sub="A"] #dkDeckB, .dk[data-sub="A"] .dk-mixer,
+  .dk[data-sub="B"] #dkDeckA, .dk[data-sub="B"] .dk-mixer,
+  .dk[data-sub="mixer"] #dkDeckA, .dk[data-sub="mixer"] #dkDeckB { display: none !important; }
+  .dk[data-sub="mixer"] .dk-faders { height: 260px; }
+  .dk.one-deck .dk-msub [data-sub="B"] { display: none; }
+  /* the A | B | MIXER switch */
+  .dk-msub { display: flex; justify-content: center; gap: 8px; margin: -2px 0 0; }
+  .dk-subbtn {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 4px; min-width: 72px; padding: 7px 12px 8px;
+    border-radius: 10px; border: 1px solid #0b0b0d; cursor: pointer; font-weight: 800; font-size: 12px; letter-spacing: 1px;
+    color: #a9a9b0; background: linear-gradient(180deg, #2c2c30, #202024); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+  }
+  .dk-subbtn i { width: 22px; height: 4px; border-radius: 2px; background: #3a3a40; }
+  .dk-subbtn.on { color: #fff; background: linear-gradient(180deg, #44444a, #2e2e33); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 0 0 1px #55555c; }
+  .dk-sub-A.on i, .dk-sub-A.playing i { background: var(--deck-a); box-shadow: 0 0 8px var(--deck-a); }
+  .dk-sub-B.on i, .dk-sub-B.playing i { background: var(--deck-b); box-shadow: 0 0 8px var(--deck-b); }
+  .dk-sub-mixer.on i { background: #e6e6ea; }
+  /* bottom tabs */
+  .dk-mnav {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(180deg, #1c1c1f, #111113); border-top: 1px solid #000; box-shadow: 0 -6px 20px rgba(0, 0, 0, .6);
+  }
+  .dk-mnav button {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer;
+    padding: 6px 2px 4px; border: 0; background: transparent; color: #8f8f97; font-size: 10.5px; font-weight: 700;
+  }
+  .dk-mi { position: relative; display: grid; place-items: center; width: 46px; height: 30px; border-radius: 15px; font-size: 17px; filter: grayscale(1) brightness(1.2); }
+  .dk-mi b { position: absolute; top: -3px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font-size: 10px; line-height: 16px; color: #111; background: var(--calls); filter: none; }
+  .dk-mi b:empty { display: none; }
+  .dk-mnav button.on { color: #fff; }
+  .dk-mnav button.on .dk-mi { background: rgba(45, 140, 255, 0.2); filter: none; box-shadow: inset 0 0 0 1px rgba(45, 140, 255, .45); }
+  .dk-msg { bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
+  body.desk-open .portal-body { padding-bottom: 0; }
+}

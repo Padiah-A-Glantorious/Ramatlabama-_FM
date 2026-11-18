@@ -113,8 +113,25 @@
       tab.classList.add("active");
       document.querySelectorAll(".ptab-view").forEach((v) => v.classList.remove("active"));
       byId("tab-" + tab.dataset.tab).classList.add("active");
+      setMenu(false);   // phones: picking a section closes the menu
     });
   });
+
+  /* ============ PHONE MENU (☰) ============
+     On phones the section buttons are in a menu that slides in from the left. */
+  function setMenu(open) {
+    document.body.classList.toggle("menu-open", open);
+    byId("menuBtn").setAttribute("aria-expanded", String(open));
+    byId("menuBackdrop").hidden = !open;
+  }
+  byId("menuBtn").addEventListener("click", () => setMenu(!document.body.classList.contains("menu-open")));
+  byId("menuBackdrop").addEventListener("click", () => setMenu(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
+  // A dot on ☰ when a section needs you (callers waiting, a meeting on).
+  setInterval(() => {
+    const busy = [...document.querySelectorAll(".ptab:not([hidden]) .qbadge")].some((b) => b.textContent.trim());
+    byId("menuDot").hidden = !busy;
+  }, 1000);
 
   /* ============ CONTENT LOAD ============ */
   async function loadContent() {

@@ -98,7 +98,7 @@
   }
   function build(root) {
     root.innerHTML = `
-    <div class="dk" id="dk">
+    <div class="dk" id="dk" data-sec="deck" data-sub="A">
       <div class="dk-main">
         <!-- One bar: going live, recording, the show's status, the lines, TALK and settings -->
         <header class="dk-card dk-top">
@@ -141,6 +141,12 @@
           </div>
         </div>
 
+        <!-- Phones: one deck (or the mixer) at a time -->
+        <div class="dk-msub" id="dkMsub" role="tablist" aria-label="Deck">
+          <button type="button" class="dk-subbtn dk-sub-A on" data-sub="A" id="dkSwA" role="tab"><i></i>A</button>
+          <button type="button" class="dk-subbtn dk-sub-B" data-sub="B" id="dkSwB" role="tab"><i></i>B</button>
+          <button type="button" class="dk-subbtn dk-sub-mixer" data-sub="mixer" id="dkSwMixer" role="tab"><i></i>MIXER</button>
+        </div>
         <div class="dk-decks" id="dkDecksRow">
           ${deckHtml("A")}
           <section class="dk-card dk-mixer">
@@ -217,6 +223,15 @@
           </section>
         </div>
         <div class="dk-msg" id="dkMsg" role="status"></div>
+        <!-- Phones: the studio's sections as tabs along the bottom -->
+        <nav class="dk-mnav" id="dkMnav" aria-label="Studio sections">
+          <button type="button" class="on" data-sec="deck"><span class="dk-mi">💿</span>Deck</button>
+          <button type="button" data-sec="list"><span class="dk-mi">🎵</span>Playlist</button>
+          <button type="button" data-sec="carts"><span class="dk-mi">🔔</span>Jingles</button>
+          <button type="button" data-sec="lines"><span class="dk-mi">📞<b id="dkMnavLinesN"></b></span>Lines</button>
+          <button type="button" data-sec="recs"><span class="dk-mi">⏺</span>Records</button>
+          <button type="button" data-sec="settings"><span class="dk-mi">⚙</span>Settings</button>
+        </nav>
       </div>
     </div>`;
     if (window.RFM_STUDIO && window.RFM_STUDIO.render) window.RFM_STUDIO.render();   // fill in the lines
@@ -384,6 +399,7 @@
     byId("dkTT" + D).classList.toggle("play", playing);          // tonearm on the record
     byId("dkTT" + D).classList.toggle("loaded", !!d.track);
     byId("dkDeck" + D).classList.toggle("playing", playing);
+    const sb = byId("dkSw" + D); if (sb) sb.classList.toggle("playing", playing);   // phone A/B switch lights up
     renderHot(d);
     renderTracks();
   }
@@ -422,6 +438,7 @@
     d.loading = 0;
     deckState(d);
     if (autoplay) { try { await d.audio.play(); } catch (_) {} }
+    if (isPhone() && byId("dk").dataset.sec !== "deck") say("✓ “" + t.title + "” is on Deck " + (D === "A" ? "A" : "B") + (autoplay ? " and playing." : ". Open Deck to play it."));
     // Waveform: decode once, keep only the peaks. Very long files are skipped (phones run out of memory).
     if (blob.size > 25 * 1024 * 1024) { byId("dkHint" + D).textContent = "LONG TRACK"; return; }
     try {
@@ -1142,6 +1159,7 @@
       byId("dk").classList.toggle("one-deck", one);
       if (one && !decks.B.audio.paused) decks.B.audio.pause();
       applyXfade(); tracksKey = ""; renderTracks();
+      if (one && byId("dk").dataset.sub === "B") setSub("A");
     };
     byId("dkGo").onclick = () => { if (!wantLive) goLive(false); };
     byId("dkStop").onclick = stopLive;
@@ -1194,8 +1212,31 @@
       const q = byId("queueCount"), n = q ? q.textContent : "";
       byId("dkCallsN").textContent = n;
       byId("dkCalls").classList.toggle("ringing", !!n);
+      byId("dkMnavLinesN").textContent = n;
     }, 1000);
+    // Phones: bottom tabs (sections) and the A | B | MIXER switch.
+    byId("dkMnav").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setSec(b.dataset.sec)));
+    byId("dkMsub").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setSub(b.dataset.sub)));
     renderChips();
+  }
+
+  /* ---- phones: one section of the studio at a time ---- */
+  const isPhone = () => window.matchMedia("(max-width: 640px)").matches;
+  function setSec(sec) {
+    const dk = byId("dk"); if (!dk) return;
+    dk.dataset.sec = sec;
+    byId("dkMnav").querySelectorAll("button").forEach((b) => { const on = b.dataset.sec === sec; b.classList.toggle("on", on); b.setAttribute("aria-current", on ? "page" : "false"); });
+    if (sec === "list") { tracksKey = ""; renderTracks(); }
+    if (sec === "deck") setTimeout(() => { drawWave("A"); drawWave("B"); }, 30);
+    if (sec === "settings") fillMics(true);
+    if (isPhone()) window.scrollTo({ top: 0 });
+  }
+  function setSub(sub) {
+    const dk = byId("dk"); if (!dk) return;
+    if (sub === "B" && byId("dkDecks").value === "1") sub = "A";
+    dk.dataset.sub = sub;
+    byId("dkMsub").querySelectorAll("button").forEach((b) => { const on = b.dataset.sub === sub; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); });
+    setTimeout(() => { drawWave("A"); drawWave("B"); }, 30);
   }
 
   window.RFM_DESK = {

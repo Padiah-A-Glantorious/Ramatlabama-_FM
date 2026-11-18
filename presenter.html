@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ramatlabama FM — Station Portal</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="presenter.css?v=34" />
-  <link rel="stylesheet" href="desk.css?v=8" />
+  <link rel="stylesheet" href="presenter.css?v=35" />
+  <link rel="stylesheet" href="desk.css?v=9" />
 </head>
 <body class="presenter-body">
 
@@ -60,6 +60,10 @@
     </div>
     <div id="meetAudio" hidden></div>
     <header class="pres-topbar">
+      <!-- Phones: the portal's sections live in a slide-in menu behind this button -->
+      <button type="button" class="menu-btn" id="menuBtn" aria-label="Menu" aria-expanded="false" aria-controls="portalTabs">
+        <span></span><span></span><span></span><i class="menu-dot" id="menuDot" hidden></i>
+      </button>
       <div class="brand">
         <span class="brand-logo"><img src="assets/logo.webp" alt="Ramatlabama FM" /></span>
         <div class="welcome">
@@ -72,6 +76,7 @@
     </header>
 
     <!-- Tabs -->
+    <div class="menu-backdrop" id="menuBackdrop" hidden></div>
     <nav class="portal-tabs" id="portalTabs">
       <button class="ptab active" data-tab="chat">💬 Chat</button>
       <button class="ptab" data-tab="desk">🔴 On Air <span class="qbadge" id="queueCount"></span></button>
@@ -418,10 +423,10 @@
   <script src="callpeer.js?v=1"></script>
   <script src="audiohub.js?v=3"></script>
   <script src="studio.js?v=11"></script>
-  <script src="desk.js?v=8"></script>
+  <script src="desk.js?v=9"></script>
   <script src="render.js?v=4"></script>
   <script src="music.js?v=6"></script>
   <script src="meeting.js?v=12"></script>
-  <script src="presenter.js?v=26"></script>
+  <script src="presenter.js?v=27"></script>
 </body>
 </html>

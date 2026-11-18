@@ -394,11 +394,11 @@ function pushMeeting() {
     if (u) sendTo(w, meetingView(u));
   }
 }
-function ringMeeting() {   // every member with the portal open who isn't in the room (and didn't say "not now")
+function ringMeeting(exceptId) {   // every member with the portal open who isn't in the room (and didn't say "not now")
   if (!meetingLive) return;
   for (const w of meetSockets()) {
     const u = db.users.find((x) => x.id === w.meetId);
-    if (!u || !canJoinMeeting(u) || meetPeople.has(u.id) || meetingLive.declined.has(u.id)) continue;
+    if (!u || u.id === exceptId || !canJoinMeeting(u) || meetPeople.has(u.id) || meetingLive.declined.has(u.id)) continue;
     sendTo(w, { type: "meeting-ring", by: meetingLive.by });
   }
 }
@@ -428,7 +428,7 @@ function handleMeeting(ws, u, d) {
     if (!canLead(u)) return err("Only a meeting leader can start the meeting.");
     if (!meetingLive) meetingLive = newMeetingLive(u, true);
     else { meetingLive.open = true; meetingLive.declined.clear(); }
-    ringMeeting(); pushMeeting();
+    ringMeeting(u.id); pushMeeting();   // don't ring the person who pressed Start (they're joining)
     return;
   }
   if (d.type === "meeting-call") {           // ring ONE member (starts a private call if none is on)

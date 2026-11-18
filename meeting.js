@@ -335,7 +335,9 @@
       }
       const o = buildOverlay();
       o.classList.toggle("page-mode", s.mode === "page");
-      o.querySelector(".meet-share-label").textContent = "🖥 " + s.name + " is sharing their screen";
+      const label = o.querySelector(".meet-share-label");
+      label.textContent = "🖥 " + String(s.name || "").split(" ")[0] + " is sharing";
+      label.title = s.name + " is sharing their screen";
       byId("shMute").textContent = muted ? "🎤 Unmute" : "🔇 Mute";
       const mine = (st.people || []).find((p) => p.id === me.id);
       byId("shHand").textContent = mine && mine.hand ? "✋ Lower hand" : "✋ Raise hand";
@@ -420,10 +422,11 @@
       if (o.scrollTop || o.scrollLeft) { c.setAttribute("data-rfm-s", String(i)); scrolls[i] = [o.scrollTop, o.scrollLeft]; }
     }
     // Leave out things that can't or mustn't be copied.
-    clone.querySelectorAll("script, noscript, audio, video, #meetShareOverlay, #meetAudio").forEach((n) => n.remove());
+    clone.querySelectorAll("script, noscript, audio, video, #meetShareOverlay, #meetAudio, #meetRing").forEach((n) => n.remove());
     clone.querySelectorAll("iframe").forEach((n) => { const d = document.createElement("div"); d.className = n.className; d.setAttribute("style", (n.getAttribute("style") || "") + ";background:#111"); n.replaceWith(d); });
     const se = document.scrollingElement || document.documentElement;
     scrolls.doc = [se.scrollTop, se.scrollLeft];
+    scrolls.body = [src.scrollTop, src.scrollLeft];   // the portal page scrolls inside <body>, not the window
     let html = clone.innerHTML;
     // Never hand the God Admin's login token to anyone.
     if (token) html = html.split(encodeURIComponent(token)).join(T_MARK).split(token).join(T_MARK);
@@ -476,22 +479,50 @@
       mirror.ready = false; mirror.loading = true; mirror.applied = "";
       mirror.frame.onload = () => { mirror.loading = false; mirror.ready = true; fillMirror(); };
       mirror.frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><base href="' + location.origin + '/">' + mirror.head +
-        "<style>*{pointer-events:none!important}</style></head><body></body></html>";
+        // No clicks, and no animations: they would replay on every update and make the copy flicker.
+        "<style>*,*::before,*::after{pointer-events:none!important;animation:none!important;transition:none!important;caret-color:transparent!important}" +
+        "html,body,*{scrollbar-width:none!important}::-webkit-scrollbar{display:none!important}</style>" +
+        "</head><body></body></html>";
     } else fillMirror();
   }
   function fillMirror() {
     const f = mirror.frame;
     const doc = f && f.contentDocument;
     if (!doc || !doc.body) return;
-    if (mirror.applied !== mirror.body) { doc.body.innerHTML = mirror.body; mirror.applied = mirror.body; }
+    if (mirror.applied !== mirror.body) {
+      if (!mirror.applied) doc.body.innerHTML = mirror.body;       // first copy: draw it all
+      else {                                                       // later: change only what changed
+        const next = doc.createElement("body");
+        next.innerHTML = mirror.body;
+        morph(doc.body, next);
+      }
+      mirror.applied = mirror.body;
+    }
     doc.body.className = mirror.cls; doc.documentElement.className = mirror.hcls;
     layoutMirror();
     for (const k of Object.keys(mirror.scrolls)) {
       const v = mirror.scrolls[k];
       if (!Array.isArray(v)) continue;
-      const n = k === "doc" ? (doc.scrollingElement || doc.documentElement) : doc.querySelector('[data-rfm-s="' + k + '"]');
+      const n = k === "doc" ? (doc.scrollingElement || doc.documentElement) : k === "body" ? doc.body : doc.querySelector('[data-rfm-s="' + k + '"]');
       if (n) { n.scrollTop = v[0] || 0; n.scrollLeft = v[1] || 0; }
     }
+  }
+  // Bring the drawn copy (`to`) in line with the new copy (`from`), touching only what
+  // differs. Unchanged pictures, scroll positions and layout stay put, so nothing flashes.
+  function morph(to, from) {
+    if (to.nodeType === 1 && to !== to.ownerDocument.body) {
+      for (const a of [...to.attributes]) if (!from.hasAttribute(a.name)) to.removeAttribute(a.name);
+      for (const a of [...from.attributes]) if (to.getAttribute(a.name) !== a.value) to.setAttribute(a.name, a.value);
+    }
+    const want = [...from.childNodes];
+    for (let i = 0; i < want.length; i++) {
+      const f = want[i], t = to.childNodes[i];
+      if (!t) { to.appendChild(f); continue; }
+      if (t.nodeType !== f.nodeType || t.nodeName !== f.nodeName || (t.nodeType === 1 && t.id !== f.id)) { to.replaceChild(f, t); continue; }
+      if (t.nodeType !== 1) { if (t.nodeValue !== f.nodeValue) t.nodeValue = f.nodeValue; continue; }
+      morph(t, f);
+    }
+    while (to.childNodes.length > want.length) to.removeChild(to.lastChild);
   }
   // The frame is exactly the God Admin's window size (so the page lays out the same),
   // then scaled to fill this screen: "Show all" fits it inside, "Fill" covers edge to edge.
@@ -532,7 +563,7 @@
 
   /* ================= ringing ================= */
   function ring(by, direct) {
-    if (!st || !st.visible) return;
+    if (!st || !st.visible || inCall || joining) return;   // never ring someone who is already joining
     byId("meetRingTitle").textContent = direct
       ? "📞 " + (by || "A leader") + " is calling you"
       : "🤝 " + (by ? by + " is calling a meeting" : "Meeting call");

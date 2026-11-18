@@ -431,10 +431,12 @@ body.meet-full-open { overflow: hidden; }
 .meet-share-overlay.fill .meet-share-video { object-fit: cover; }
 .meet-share-msg { position: relative; color: #ddd; font-size: 15px; }
 .meet-share-overlay.has-video .meet-share-msg { display: none; }
-.meet-share-bar { position: absolute; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; max-width: 96vw; padding: 7px 10px; border-radius: 999px; background: rgba(15,15,18,0.78); border: 1px solid var(--glass-border); opacity: .35; transition: opacity .2s; }
-.meet-share-bar:hover, .meet-share-bar:focus-within { opacity: 1; }
-.meet-share-bar .m-btn { background: rgba(255,255,255,0.1); color: #fff; }
-.meet-share-label { color: #fff; font-size: 12.5px; font-weight: 700; padding: 0 6px; }
+/* One slim strip at the bottom: never wraps over the shared screen */
+.meet-share-bar { position: absolute; z-index: 2; left: 50%; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; max-width: calc(100vw - 16px); overflow-x: auto; scrollbar-width: none; padding: 5px 6px 5px 10px; border-radius: 12px; background: rgba(12,12,15,0.88); border: 1px solid var(--glass-border); box-shadow: 0 6px 24px rgba(0,0,0,0.5); opacity: .55; transition: opacity .2s; }
+.meet-share-bar::-webkit-scrollbar { display: none; }
+.meet-share-bar:hover, .meet-share-bar:focus-within, .meet-share-bar:active { opacity: 1; }
+.meet-share-bar .m-btn { flex: 0 0 auto; white-space: nowrap; padding: 5px 9px; font-size: 12px; background: rgba(255,255,255,0.1); color: #fff; }
+.meet-share-label { flex: 0 1 auto; min-width: 0; max-width: 36vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 12px; font-weight: 700; }
 body.meet-sharing { overflow: hidden; }
 /* "Share my portal screen": the God Admin's page copy, at their window size, scaled to fill */
 .meet-mirror-frame { position: absolute; left: 50%; top: 50%; border: 0; background: #0b0b0e; transform-origin: center center; pointer-events: none; }

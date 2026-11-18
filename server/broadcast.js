@@ -103,6 +103,22 @@ module.exports = function setupBroadcast(h) {
   let recs = { items: [] };
   try { const j = JSON.parse(fs.readFileSync(REC_FILE, "utf8").replace(/^\uFEFF/, "")); if (j && Array.isArray(j.items)) recs = j; } catch (_) {}
   recs.items = recs.items.filter((r) => { try { return fs.existsSync(path.join(REC_DIR, r.file)); } catch (_) { return false; } });
+  // Leftovers (a download finished just before a restart, or a recording cut by a crash): remove them.
+  try {
+    const keep = new Set(recs.items.map((r) => r.file));
+    fs.readdirSync(REC_DIR).forEach((f) => { if (!keep.has(f)) { try { fs.unlinkSync(path.join(REC_DIR, f)); } catch (_) {} } });
+  } catch (_) {}
+  // Downloaded recordings: gone from the list at once, the file itself 2 minutes later
+  // (a phone that retries the download still gets it).
+  const downloaded = new Map();   // id -> recording
+  const DOWNLOAD_GRACE = (parseInt(process.env.REC_DOWNLOAD_GRACE_S, 10) || 120) * 1000;
+  function markDownloaded(r) {
+    if (downloaded.has(r.id)) return;
+    downloaded.set(r.id, r);
+    recs.items = recs.items.filter((x) => x.id !== r.id);
+    saveRecs(); recSeq = Date.now(); push();
+    setTimeout(() => { downloaded.delete(r.id); try { fs.unlinkSync(path.join(REC_DIR, r.file)); } catch (_) {} }, DOWNLOAD_GRACE);
+  }
   let recSeq = Date.now();
   const saveRecs = () => { try { fs.writeFileSync(REC_FILE, JSON.stringify(recs, null, 2)); } catch (_) {} };
   const recUsed = () => recs.items.reduce((n, r) => n + (r.size || 0), 0);
@@ -254,7 +270,6 @@ module.exports = function setupBroadcast(h) {
           ice: { req: null, state: "off", error: "", retryAt: 0, fatal: false }, bytesIn: 0, bytesOut: 0, lastData: 0, goneAt: 0 };
       }
       ws.bcOwner = true;
-      if (d.record && !bc.rec) { const err = startRec(d.title); if (err) sendTo(ws, { type: "bc-note", text: err, bad: true }); }
       sendTo(ws, { type: "bc-ok", target: bc.target, kbps: bc.kbps, since: bc.since, famcastReady: famcastReady() });
       push();
       return;
@@ -329,8 +344,10 @@ module.exports = function setupBroadcast(h) {
     if (p.startsWith("/api/recordings/file/") && (req.method === "GET" || req.method === "HEAD")) {
       const u = userFromToken(String(url.searchParams.get("t") || ""));
       if (!u) { res.writeHead(403); res.end("Forbidden"); return true; }
-      const r = recs.items.find((x) => x.id === p.slice("/api/recordings/file/".length));
+      const rid0 = p.slice("/api/recordings/file/".length);
+      const r = recs.items.find((x) => x.id === rid0) || downloaded.get(rid0);
       if (!r) { res.writeHead(404); res.end("Not found"); return true; }
+      const isDownload = url.searchParams.get("dl") === "1";
       const fp = path.join(REC_DIR, path.basename(r.file));
       fs.stat(fp, (err, st) => {
         if (err) { res.writeHead(404); return res.end("Not found"); }
@@ -338,7 +355,7 @@ module.exports = function setupBroadcast(h) {
         const title = (r.title.replace(/[\\/:*?"<>|\u0000-\u001F]+/g, " ").replace(/\s+/g, " ").trim() || "show") + ".mp3";
         const ascii = title.replace(/[^\x20-\x7E]+/g, "-").replace(/"/g, "");
         const headers = { "Content-Type": "audio/mpeg", "Accept-Ranges": "bytes", "Cache-Control": "private, no-store" };
-        if (url.searchParams.get("dl") === "1") headers["Content-Disposition"] = 'attachment; filename="' + ascii + "\"; filename*=UTF-8''" + encodeURIComponent(title);
+        if (isDownload) headers["Content-Disposition"] = 'attachment; filename="' + ascii + "\"; filename*=UTF-8''" + encodeURIComponent(title);
         let start = 0, end = st.size - 1, code = 200;
         const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || "").trim());
         if (m && (m[1] || m[2])) {
@@ -350,6 +367,18 @@ module.exports = function setupBroadcast(h) {
         headers["Content-Length"] = end - start + 1;
         res.writeHead(code, headers);
         if (req.method === "HEAD") return res.end();
+        // A download that sent the file all the way to the last byte = done: remove it from the server.
+        // (Listening with ▷ or replaying on a deck never deletes anything.)
+        if (isDownload && end === st.size - 1) {
+          let sent = 0;
+          const need = end - start + 1;
+          res.on("finish", () => { if (sent >= need && (start === 0 || code === 206)) markDownloaded(r); });
+          const rs = fs.createReadStream(fp, { start, end });
+          rs.on("data", (c) => { sent += c.length; });
+          rs.on("error", () => res.destroy());
+          rs.pipe(res);
+          return;
+        }
         const rs = fs.createReadStream(fp, { start, end }); rs.on("error", () => res.destroy()); rs.pipe(res);
       });
       return true;

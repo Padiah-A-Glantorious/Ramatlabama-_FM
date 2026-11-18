@@ -32,7 +32,7 @@
   let state = null;             // bc-state from the server
   let wantLive = false, rec = null, recMime = "", sendChain = Promise.resolve(), wakeLock = null, liveSince = 0;
   let listenAudio = null, wasHiddenLive = false;
-  let recArmed = false, recs = [], recSeqSeen = 0, recCanManage = false, recPlayer = null, shows = null;
+  let recs = [], recSeqSeen = 0, recCanManage = false, recPlayer = null, shows = null;
 
   /* ================= markup ================= */
   function deckHtml(D) {
@@ -170,7 +170,7 @@
           </section>
           <section class="dk-card dk-recs">
             <div class="dk-cartbar">
-              <div><strong>Recordings</strong><small>Shows recorded with ● REC, saved as MP3 when you go off air</small></div>
+              <div><strong>Recordings</strong><small>While live, press ● REC to record. Saved as MP3 when you stop recording or go off air. Downloading removes it from the server.</small></div>
               <span class="dk-count" id="dkRecUsed"></span>
             </div>
             <div class="dk-reclist" id="dkRecList"><p class="dk-empty">No recordings yet.</p></div>
@@ -621,27 +621,24 @@
     const show = showNow();
     return (show ? show + " · " : "") + (me && me.name ? me.name + " · " : "") + stamp;
   }
-  function toggleRec() {
+  // Recording only ever starts when you press ● REC while you're live. Never by itself.
+  async function toggleRec() {
     const s = state && state.live;
-    if (isMineLive()) {
-      const on = !(s && s.rec);
-      if (!on && !confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
-      send({ type: "bc-record", token, on, title: recTitle() });
-      if (on) say("● Recording the show. It's saved as an MP3 when you go off air.");
-      return;
-    }
-    recArmed = !recArmed;
-    say(recArmed ? "● REC is ready: the whole show is recorded from the moment you GO LIVE." : "REC switched off.");
-    renderRec();
+    if (!isMineLive()) return say("Go live first, then press ● REC to record the show.", true);
+    const on = !(s && s.rec);
+    if (!on && !confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
+    if (on && !shows) await loadShows();
+    send({ type: "bc-record", token, on, title: recTitle() });
+    if (on) say("● Recording the show. It's saved as an MP3 when you press REC again or go off air.");
   }
   function renderRec() {
     const b = byId("dkRec"); if (!b) return;
     const s = state && state.live;
     const rec = isMineLive() && s && s.rec;
     b.classList.toggle("on", !!rec);
-    b.classList.toggle("armed", !rec && recArmed && !isMineLive());
-    b.textContent = rec ? "● REC " + fmt((Date.now() - s.rec.since) / 1000) : recArmed && !isMineLive() ? "● REC READY" : "● REC";
-    b.title = rec ? "Recording: " + fmtMB(s.rec.bytes) + " so far. Tap to stop recording." : "Record the whole show as an MP3";
+    b.disabled = !isMineLive();
+    b.textContent = rec ? "● REC " + fmt((Date.now() - s.rec.since) / 1000) : "● REC";
+    b.title = rec ? "Recording: " + fmtMB(s.rec.bytes) + " so far. Tap to stop and save it." : isMineLive() ? "Record the show as an MP3" : "Go live first to record";
   }
   async function loadRecs() {
     try {
@@ -654,7 +651,7 @@
   function renderRecs() {
     const box = byId("dkRecList"); if (!box) return;
     box.innerHTML = "";
-    if (!recs.length) { box.appendChild(el("p", "dk-empty", "No recordings yet. Press ● REC, then GO LIVE.")); return; }
+    if (!recs.length) { box.appendChild(el("p", "dk-empty", "No recordings waiting. GO LIVE, then press ● REC to record.")); return; }
     recs.forEach((r) => {
       const row = el("div", "dk-track dk-recrow");
       row.appendChild(el("span", "dk-idx", "🎙"));
@@ -666,7 +663,14 @@
       const playing = recPlayer && recPlayer.dataset.id === r.id && !recPlayer.paused;
       const b = (txt, cls, fn, title) => { const x = el("button", "dk-btn dk-tbtn " + (cls || ""), txt); x.type = "button"; if (title) x.title = title; x.onclick = fn; acts.appendChild(x); return x; };
       b(playing ? "❚❚" : "▷", "dk-round", () => previewRec(r), "Listen here (not on air)");
-      const dl = el("a", "dk-btn dk-tbtn", "⬇ MP3"); dl.href = recUrl(r, true); dl.title = "Download the MP3"; dl.setAttribute("download", ""); acts.appendChild(dl);
+      const dl = el("a", "dk-btn dk-tbtn", "⬇ MP3"); dl.href = recUrl(r, true); dl.setAttribute("download", "");
+      dl.title = "Download the MP3. Once it has downloaded it is removed from the server.";
+      dl.onclick = (e) => {
+        if (!confirm("Download “" + r.title + "”?\n\nWhen the download finishes, the recording is removed from the server to free up space. Keep the MP3 safe on your device.")) { e.preventDefault(); return; }
+        if (recPlayer && recPlayer.dataset.id === r.id) { recPlayer.pause(); recPlayer = null; }
+        say("Downloading… The recording leaves this list when the download has finished.");
+      };
+      acts.appendChild(dl);
       b("LOAD A", "dk-la", () => loadDeck("A", { key: "r:" + r.id, title: r.title, sub: "recorded show", url: recUrl(r), source: "rec" }, false), "Put this show on Deck A to replay it on air");
       if (recCanManage || (me && r.by === me.id)) b("🗑", "dk-round", () => deleteRec(r), "Delete this recording");
       row.appendChild(acts);
@@ -704,9 +708,7 @@
     if (!recMime) return say("This browser can't broadcast. Use Chrome, Edge or Safari (iPhone: iOS 14.5 or newer).", true);
     if (!force && !wantLive && !confirm("Go live now? Everything on the mixer (decks, carts, TALK and CALLS) goes on air.")) return;
     wantLive = true;
-    if (!shows) await loadShows();
-    send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: byId("dkTarget").value, force: !!force, record: recArmed, title: recTitle() });
-    recArmed = false;   // from here the server holds the recording (it carries on through reconnects)
+    send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: byId("dkTarget").value, force: !!force });
     renderLive();
   }
   function startRecorder() {

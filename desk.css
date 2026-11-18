@@ -42,10 +42,7 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 .dk-row4 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .dk-row4 .dk-btn { padding: 10px 4px; }
 .dk-rec { color: #ff8a80; border-color: rgba(255, 90, 79, 0.4); }
-.dk-rec.armed { border-color: var(--live); box-shadow: inset 0 0 0 1px var(--live); animation: dkBlink 1.4s steps(2, start) infinite; }
-.dk-rec.on { color: #fff; background: #b3261e; border-color: var(--live); font-variant-numeric: tabular-nums; }
-.dk-rec.on::first-letter { color: #ffd0cc; }
-@keyframes dkBlink { 50% { color: #fff; } }
+.dk-rec.on { color: #fff; background: #b3261e; border-color: var(--live); font-variant-numeric: tabular-nums; animation: dkPulse 1.6s infinite; }
 .dk-recs { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; }
 .dk-reclist { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
 .dk-recrow .dk-idx { font-size: 15px; }

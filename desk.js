@@ -106,7 +106,7 @@
           <div class="dk-transport">
             <span class="dk-livedot" id="dkLiveDot" aria-hidden="true"></span>
             <button type="button" class="dk-btn dk-go" id="dkGo">GO LIVE</button>
-            <button type="button" class="dk-btn" id="dkStop">STOP</button>
+            <button type="button" class="dk-btn" id="dkStop" title="End the live show (a recording keeps going until you press REC)">END LIVE</button>
             <button type="button" class="dk-btn dk-rec" id="dkRec" title="Go live first to record">● REC</button>
           </div>
           <span class="dk-spacer"></span>
@@ -241,7 +241,8 @@
   function say(text, bad) {
     const m = byId("dkMsg"); if (!m) return;
     m.textContent = text || ""; m.classList.toggle("bad", !!bad); m.classList.toggle("show", !!text);
-    clearTimeout(say.t); if (text && !bad) say.t = setTimeout(() => m.classList.remove("show"), 6000);
+    clearTimeout(say.t); if (text) say.t = setTimeout(() => m.classList.remove("show"), bad ? 12000 : 6000);
+    if (!m.dataset.wired) { m.dataset.wired = "1"; m.addEventListener("click", () => m.classList.remove("show")); }   // tap to dismiss
   }
 
   /* ================= audio engine ================= */
@@ -913,7 +914,7 @@
     const rec = !!since || !!(solo && !solo.since);
     b.classList.toggle("on", rec);
     b.disabled = false;
-    b.textContent = since ? "● REC " + fmt((Date.now() - since) / 1000) : rec ? "● REC…" : "● REC";
+    b.textContent = since && !isPhone() ? "● REC " + fmt((Date.now() - since) / 1000) : rec && !since ? "● REC…" : "● REC";
     b.title = rec ? "Recording" + (liveRec ? ": " + fmtMB(s.rec.bytes) + " so far" : solo ? " (not live)" : "") + ". Tap to stop and save it."
       : isMineLive() ? "Record the show as an MP3" : "Record the mixer as an MP3 (nothing goes to listeners)";
   }
@@ -1013,7 +1014,9 @@
   function stopLive() {
     if (!wantLive && !(state && state.live && me && state.live.userId === me.id)) return;
     const recording = !!(state && state.live && state.live.rec);
-    if (!confirm("Stop the broadcast? Listeners go back to the fill-in music." + (recording ? "\n\nThe recording is saved as an MP3." : ""))) return;
+    const note = recording ? "\n\nThis also ends the recording (it's saved as an MP3). To stop only the recording, press ● REC instead."
+      : solo ? "\n\nYour recording keeps going until you press ● REC." : "";
+    if (!confirm("End the live show? Listeners go back to the fill-in music." + note)) return;
     wantLive = false;
     send({ type: "bc-stop", token });
     stopRecorder(); if (!solo) keepAwake(false); renderLive();   // an off-air recording keeps going
@@ -1043,7 +1046,8 @@
     // and problems pop up as a message (once each).
     go.classList.toggle("on", onAir);
     go.classList.toggle("busy", !!s && !mine);
-    go.textContent = onAir ? "LIVE " + fmt((Date.now() - s.since) / 1000) : wantLive ? "STARTING…" : "GO LIVE";
+    // Phones: no timer in the button (it doesn't fit); the time is in the tooltip.
+    go.textContent = onAir ? (isPhone() ? "LIVE" : "LIVE " + fmt((Date.now() - s.since) / 1000)) : wantLive ? "STARTING…" : "GO LIVE";
     byId("dkLiveDot").classList.toggle("on", onAir);
     byId("dkStop").disabled = !onAir && !(mine && s);
     byId("dkQuality").disabled = onAir;
@@ -1053,7 +1057,7 @@
       ? (s.famcast === "on" ? "On air on Famcast" : s.famcast === "connecting" ? "Connecting to Famcast…" : s.famcast === "error" ? "Famcast problem" : "Starting…")
       : "Preview only (not on Famcast)";
     else if (state && !state.famcastReady) tip = "Famcast isn't set up on this server, so GO LIVE runs a preview";
-    go.title = tip;
+    go.title = onAir ? tip + " · live for " + fmt((Date.now() - s.since) / 1000) : tip;
     const err = s && mine ? s.error || "" : "";
     if (err && err !== lastLiveErr) say(err, true);
     lastLiveErr = err;

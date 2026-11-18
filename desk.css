@@ -600,3 +600,17 @@ body.desk-open .portal-body { background: transparent; }
   .dk-mnav { padding-top: 4px; }
   .dk-mi { height: 28px; }
 }
+
+/* Phones: GO LIVE · STOP · REC always share the width (never pushed off the screen) */
+@media (max-width: 640px) {
+  .dk-transport { min-width: 0; }
+  .dk-transport .dk-btn, .dk-go.on { min-width: 0 !important; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; letter-spacing: 1px; }
+  .dk-rec.on { animation: dkPulse 1.6s infinite, dkRecBlink 1.2s steps(2, start) infinite; }
+  @keyframes dkRecBlink { 50% { color: #ffd0cc; } }
+}
+
+/* Phones: messages appear at the very top (over the portal header), never over the deck's buttons */
+@media (max-width: 640px) {
+  .dk-msg { top: calc(8px + env(safe-area-inset-top, 0px)); bottom: auto !important; transform: translate(-50%, -8px); cursor: pointer; }
+  .dk-msg.show { transform: translate(-50%, 0); }
+}

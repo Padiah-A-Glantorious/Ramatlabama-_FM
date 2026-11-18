@@ -51,7 +51,9 @@ module.exports = function setupBroadcast(h) {
         connected: isOpen(bc.ws), receiving: Date.now() - bc.lastData < 5000,
         famcast: bc.target === "famcast" ? bc.ice.state : "off", error: bc.ice.error || bc.ffError || "",
         bytesIn: bc.bytesIn, bytesOut: bc.bytesOut,
+        rec: bc.rec ? { since: bc.rec.start, bytes: bc.rec.bytes } : null,
       } : null,
+      recSeq,   // changes whenever a recording is saved or deleted (pages reload their list)
     };
   }
   function push() {
@@ -90,7 +92,63 @@ module.exports = function setupBroadcast(h) {
     bc.bytesOut += chunk.length;
     for (const res of previews) { try { res.write(chunk); } catch (_) {} }
     if (bc.target === "famcast") iceWrite(chunk);
+    if (bc.rec) recWrite(chunk);
   }
+
+  /* ---------------- recording the show (the exact MP3 that goes on air) ---------------- */
+  const REC_DIR = path.join(DATA_DIR, "recordings");
+  const REC_FILE = path.join(DATA_DIR, "recordings.json");
+  const REC_MAX_TOTAL = (parseInt(process.env.RECORDINGS_MAX_MB, 10) || 600) * 1024 * 1024;
+  try { fs.mkdirSync(REC_DIR, { recursive: true }); } catch (_) {}
+  let recs = { items: [] };
+  try { const j = JSON.parse(fs.readFileSync(REC_FILE, "utf8").replace(/^\uFEFF/, "")); if (j && Array.isArray(j.items)) recs = j; } catch (_) {}
+  recs.items = recs.items.filter((r) => { try { return fs.existsSync(path.join(REC_DIR, r.file)); } catch (_) { return false; } });
+  let recSeq = Date.now();
+  const saveRecs = () => { try { fs.writeFileSync(REC_FILE, JSON.stringify(recs, null, 2)); } catch (_) {} };
+  const recUsed = () => recs.items.reduce((n, r) => n + (r.size || 0), 0);
+  function saStamp(t) {   // "2026-11-18 14:05" in South Africa
+    try {
+      const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Johannesburg", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+        .formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+      return p.year + "-" + p.month + "-" + p.day + " " + p.hour + ":" + p.minute;
+    } catch (_) { return new Date(t).toISOString().slice(0, 16).replace("T", " "); }
+  }
+  function startRec(title) {
+    if (!bc || bc.rec) return null;
+    if (recUsed() >= REC_MAX_TOTAL) return "Recording storage is full. Delete old recordings first.";
+    const start = Date.now(), stamp = saStamp(start);
+    const id = "rec" + start.toString(36) + rid(3);
+    const file = "show-" + stamp.replace(/[^0-9]/g, "").slice(0, 12) + "-" + id + ".mp3";
+    let out;
+    try { out = fs.createWriteStream(path.join(REC_DIR, file)); } catch (_) { return "Couldn't start the recording on the server."; }
+    out.on("error", () => { if (bc && bc.rec && bc.rec.out === out) { bc.rec = null; recNote("The recording stopped: the server couldn't write it."); } });
+    const name = sanitize(title, 80).trim() || (bc.name + " · " + stamp);
+    bc.rec = { id, file, out, start, bytes: 0, title: name, by: bc.userId, byName: bc.name, kbps: bc.kbps };
+    return null;
+  }
+  function recWrite(chunk) {
+    const r = bc.rec;
+    r.bytes += chunk.length;
+    try { r.out.write(chunk); } catch (_) {}
+    if (recUsed() + r.bytes > REC_MAX_TOTAL) { finishRec(); recNote("Recording storage is full, so the recording stopped and was saved. Delete old recordings to record more."); }
+  }
+  function recNote(text) { if (bc && bc.ws) sendTo(bc.ws, { type: "bc-note", text }); }
+  function finishRec() {   // close the file and list it
+    if (!bc || !bc.rec) return null;
+    const r = bc.rec; bc.rec = null;
+    const show = bc;
+    r.out.end(() => {
+      let size = r.bytes;
+      try { size = fs.statSync(path.join(REC_DIR, r.file)).size; } catch (_) {}
+      if (size < 2000) { try { fs.unlinkSync(path.join(REC_DIR, r.file)); } catch (_) {} return; }   // nothing was recorded
+      const item = { id: r.id, file: r.file, title: r.title, by: r.by, byName: r.byName, start: r.start, end: Date.now(), size, kbps: r.kbps };
+      recs.items.unshift(item); saveRecs(); recSeq = Date.now();
+      if (show.ws) sendTo(show.ws, { type: "bc-recorded", rec: recView(item, show.ws.bcViewer) });
+      push();
+    });
+    return r;
+  }
+  const recView = (r) => ({ id: r.id, title: r.title, by: r.by, byName: r.byName, start: r.start, end: r.end, size: r.size, kbps: r.kbps, secs: Math.round((r.end - r.start) / 1000) });
 
   /* ---------------- Famcast (Icecast source over HTTP PUT) ---------------- */
   function iceWrite(chunk) {
@@ -155,6 +213,7 @@ module.exports = function setupBroadcast(h) {
   function stopShow(reason) {
     if (!bc) return;
     const show = bc;
+    finishRec();   // going off air saves the recording
     stopFfmpeg(); iceClose();
     for (const res of previews) { try { res.end(); } catch (_) {} }
     previews.clear();
@@ -195,7 +254,16 @@ module.exports = function setupBroadcast(h) {
           ice: { req: null, state: "off", error: "", retryAt: 0, fatal: false }, bytesIn: 0, bytesOut: 0, lastData: 0, goneAt: 0 };
       }
       ws.bcOwner = true;
+      if (d.record && !bc.rec) { const err = startRec(d.title); if (err) sendTo(ws, { type: "bc-note", text: err, bad: true }); }
       sendTo(ws, { type: "bc-ok", target: bc.target, kbps: bc.kbps, since: bc.since, famcastReady: famcastReady() });
+      push();
+      return;
+    }
+    if (d.type === "bc-record") {   // REC on / off during the show
+      const u = d.token ? userFromToken(String(d.token)) : null;
+      if (!bc || !u || bc.userId !== u.id) return sendTo(ws, { type: "bc-note", text: "Go live first: the recording is of the show on air.", bad: true });
+      if (d.on) { const err = startRec(d.title); if (err) sendTo(ws, { type: "bc-note", text: err, bad: true }); }
+      else finishRec();
       push();
       return;
     }
@@ -240,6 +308,50 @@ module.exports = function setupBroadcast(h) {
       res.writeHead(200, { "Content-Type": "audio/mpeg", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
       previews.add(res);
       req.on("close", () => previews.delete(res));
+      return true;
+    }
+    /* ---- recordings: list, download, delete (staff only) ---- */
+    if (p === "/api/recordings/list" && req.method === "POST") {
+      const body = await readBody(req);
+      const u = body && body.token ? userFromToken(String(body.token)) : null;
+      if (!u) { sendJson(res, 401, { ok: false, error: "Log in again." }); return true; }
+      sendJson(res, 200, { ok: true, recordings: recs.items.map(recView), used: recUsed(), max: REC_MAX_TOTAL, canManage: canManage(u.role) }); return true;
+    }
+    if (p === "/api/recordings/delete" && req.method === "POST") {
+      const body = await readBody(req);
+      const u = body && body.token ? userFromToken(String(body.token)) : null;
+      if (!u) { sendJson(res, 401, { ok: false, error: "Log in again." }); return true; }
+      const r = recs.items.find((x) => x.id === String(body.id));
+      if (r && !(canManage(u.role) || r.by === u.id)) { sendJson(res, 403, { ok: false, error: "You can only delete your own recordings." }); return true; }
+      if (r) { try { fs.unlinkSync(path.join(REC_DIR, r.file)); } catch (_) {} recs.items = recs.items.filter((x) => x !== r); saveRecs(); recSeq = Date.now(); push(); }
+      sendJson(res, 200, { ok: true, recordings: recs.items.map(recView), used: recUsed(), max: REC_MAX_TOTAL, canManage: canManage(u.role) }); return true;
+    }
+    if (p.startsWith("/api/recordings/file/") && (req.method === "GET" || req.method === "HEAD")) {
+      const u = userFromToken(String(url.searchParams.get("t") || ""));
+      if (!u) { res.writeHead(403); res.end("Forbidden"); return true; }
+      const r = recs.items.find((x) => x.id === p.slice("/api/recordings/file/".length));
+      if (!r) { res.writeHead(404); res.end("Not found"); return true; }
+      const fp = path.join(REC_DIR, path.basename(r.file));
+      fs.stat(fp, (err, st) => {
+        if (err) { res.writeHead(404); return res.end("Not found"); }
+        // File name = the recording's title (UTF-8 for modern browsers, a plain fallback for old ones).
+        const title = (r.title.replace(/[\\/:*?"<>|\u0000-\u001F]+/g, " ").replace(/\s+/g, " ").trim() || "show") + ".mp3";
+        const ascii = title.replace(/[^\x20-\x7E]+/g, "-").replace(/"/g, "");
+        const headers = { "Content-Type": "audio/mpeg", "Accept-Ranges": "bytes", "Cache-Control": "private, no-store" };
+        if (url.searchParams.get("dl") === "1") headers["Content-Disposition"] = 'attachment; filename="' + ascii + "\"; filename*=UTF-8''" + encodeURIComponent(title);
+        let start = 0, end = st.size - 1, code = 200;
+        const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || "").trim());
+        if (m && (m[1] || m[2])) {
+          if (m[1] === "") start = Math.max(0, st.size - parseInt(m[2], 10));
+          else { start = parseInt(m[1], 10); if (m[2]) end = Math.min(parseInt(m[2], 10), st.size - 1); }
+          if (start > end) { res.writeHead(416, { "Content-Range": "bytes */" + st.size }); return res.end(); }
+          code = 206; headers["Content-Range"] = "bytes " + start + "-" + end + "/" + st.size;
+        }
+        headers["Content-Length"] = end - start + 1;
+        res.writeHead(code, headers);
+        if (req.method === "HEAD") return res.end();
+        const rs = fs.createReadStream(fp, { start, end }); rs.on("error", () => res.destroy()); rs.pipe(res);
+      });
       return true;
     }
     if (p === "/api/carts/list" && req.method === "POST") {

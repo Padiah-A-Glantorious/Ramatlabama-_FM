@@ -32,6 +32,7 @@
   let state = null;             // bc-state from the server
   let wantLive = false, rec = null, recMime = "", sendChain = Promise.resolve(), wakeLock = null, liveSince = 0;
   let listenAudio = null, wasHiddenLive = false;
+  let recArmed = false, recs = [], recSeqSeen = 0, recCanManage = false, recPlayer = null, shows = null;
 
   /* ================= markup ================= */
   function deckHtml(D) {
@@ -77,9 +78,10 @@
       <aside class="dk-side">
         <section class="dk-card">
           <div class="dk-label">BROADCAST CONTROLS</div>
-          <div class="dk-row3">
+          <div class="dk-row4">
             <button type="button" class="dk-btn dk-go" id="dkGo">GO LIVE</button>
             <button type="button" class="dk-btn" id="dkStop">STOP</button>
+            <button type="button" class="dk-btn dk-rec" id="dkRec" title="Record the whole show as an MP3">● REC</button>
             <button type="button" class="dk-btn" id="dkReload">RELOAD</button>
           </div>
         </section>
@@ -165,6 +167,13 @@
               <select id="dkCartCat" aria-label="Cart type"><option value="jingles">Jingle</option><option value="sfx">SFX</option><option value="clips">Clip</option><option value="ads">Ad</option></select>
               <label class="dk-btn dk-smb">＋ Add cart<input type="file" id="dkCartFile" accept="audio/*" hidden /></label>
             </div>
+          </section>
+          <section class="dk-card dk-recs">
+            <div class="dk-cartbar">
+              <div><strong>Recordings</strong><small>Shows recorded with ● REC, saved as MP3 when you go off air</small></div>
+              <span class="dk-count" id="dkRecUsed"></span>
+            </div>
+            <div class="dk-reclist" id="dkRecList"><p class="dk-empty">No recordings yet.</p></div>
           </section>
         </div>
         <div class="dk-msg" id="dkMsg" role="status"></div>
@@ -287,6 +296,14 @@
     byId("dkSub" + D).textContent = t.sub || "";
     byId("dkHint" + D).textContent = "LOADING…"; byId("dkHint" + D).hidden = false;
     deckState(d); drawWave(D);
+    if (t.source === "rec") {   // a recorded show: stream it from the server (too long to load whole or draw)
+      if (d.url) { URL.revokeObjectURL(d.url); d.url = ""; }
+      d.audio.src = t.url; d.loading = 0;
+      byId("dkHint" + D).textContent = "RECORDED SHOW";
+      deckState(d);
+      if (autoplay) { try { await d.audio.play(); } catch (_) {} }
+      return;
+    }
     let blob;
     try { blob = await blobOf(t); } catch (_) { if (job === d.loading) { d.loading = 0; d.track = null; byId("dkTitle" + D).textContent = "Couldn't load that track"; byId("dkSub" + D).textContent = "EMPTY"; deckState(d); } return; }
     if (job !== d.loading) return;
@@ -296,7 +313,8 @@
     d.loading = 0;
     deckState(d);
     if (autoplay) { try { await d.audio.play(); } catch (_) {} }
-    // Waveform: decode once, keep only the peaks.
+    // Waveform: decode once, keep only the peaks. Very long files are skipped (phones run out of memory).
+    if (blob.size > 25 * 1024 * 1024) { byId("dkHint" + D).textContent = "LONG TRACK"; return; }
     try {
       const buf = await N.ctx.decodeAudioData(await blob.arrayBuffer());
       if (d.track !== t) return;
@@ -576,6 +594,103 @@
     } catch (e) { say(e.message, true); }
   }
 
+  /* ================= recording the show ================= */
+  // The server records the exact MP3 that goes on air, and saves it when you go off air
+  // (or switch REC off). Before going live, REC is "armed": recording starts with the show.
+  const isMineLive = () => !!(state && state.live && me && state.live.userId === me.id && wantLive);
+  const fmtMB = (b) => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + " MB";
+  async function loadShows() {
+    try { shows = await (await fetch("/api/content", { cache: "no-store" })).json(); } catch (_) { shows = null; }
+  }
+  function showNow() {   // the scheduled show on air now (South African time)
+    if (!shows) return "";
+    let day = 0, mins = 0;
+    try {
+      const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Johannesburg", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+        .formatToParts(new Date()).map((x) => [x.type, x.value]));
+      day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday); mins = Number(p.hour) * 60 + Number(p.minute);
+    } catch (_) { const d = new Date(); day = d.getDay(); mins = d.getHours() * 60 + d.getMinutes(); }
+    const list = (day === 0 ? shows.showsSunday : day === 6 ? shows.showsSaturday : shows.showsWeekday) || [];
+    const m = (t) => { const [h, x] = String(t || "0:0").split(":").map(Number); return h * 60 + (x || 0); };
+    const s = list.find((x) => { const a = m(x.start), b = m(x.end); return a <= b ? mins >= a && mins < b : mins >= a || mins < b; });
+    return s ? s.show : "";
+  }
+  function recTitle() {
+    let stamp = "";
+    try { stamp = new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date()); } catch (_) { stamp = new Date().toLocaleString(); }
+    const show = showNow();
+    return (show ? show + " · " : "") + (me && me.name ? me.name + " · " : "") + stamp;
+  }
+  function toggleRec() {
+    const s = state && state.live;
+    if (isMineLive()) {
+      const on = !(s && s.rec);
+      if (!on && !confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
+      send({ type: "bc-record", token, on, title: recTitle() });
+      if (on) say("● Recording the show. It's saved as an MP3 when you go off air.");
+      return;
+    }
+    recArmed = !recArmed;
+    say(recArmed ? "● REC is ready: the whole show is recorded from the moment you GO LIVE." : "REC switched off.");
+    renderRec();
+  }
+  function renderRec() {
+    const b = byId("dkRec"); if (!b) return;
+    const s = state && state.live;
+    const rec = isMineLive() && s && s.rec;
+    b.classList.toggle("on", !!rec);
+    b.classList.toggle("armed", !rec && recArmed && !isMineLive());
+    b.textContent = rec ? "● REC " + fmt((Date.now() - s.rec.since) / 1000) : recArmed && !isMineLive() ? "● REC READY" : "● REC";
+    b.title = rec ? "Recording: " + fmtMB(s.rec.bytes) + " so far. Tap to stop recording." : "Record the whole show as an MP3";
+  }
+  async function loadRecs() {
+    try {
+      const r = await fetch("/api/recordings/list", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+      const j = await r.json();
+      if (j && j.ok) { recs = j.recordings || []; recCanManage = !!j.canManage; byId("dkRecUsed").textContent = fmtMB(j.used) + " of " + fmtMB(j.max); renderRecs(); }
+    } catch (_) {}
+  }
+  const recUrl = (r, dl) => "/api/recordings/file/" + encodeURIComponent(r.id) + "?t=" + encodeURIComponent(token) + (dl ? "&dl=1" : "");
+  function renderRecs() {
+    const box = byId("dkRecList"); if (!box) return;
+    box.innerHTML = "";
+    if (!recs.length) { box.appendChild(el("p", "dk-empty", "No recordings yet. Press ● REC, then GO LIVE.")); return; }
+    recs.forEach((r) => {
+      const row = el("div", "dk-track dk-recrow");
+      row.appendChild(el("span", "dk-idx", "🎙"));
+      const info = el("div", "dk-tinfo");
+      let when = ""; try { when = new Date(r.start).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) {}
+      info.append(el("div", "dk-ttitle", r.title), el("div", "dk-tsub", [when, fmt(r.secs), fmtMB(r.size), r.byName].filter(Boolean).join(" · ")));
+      row.appendChild(info);
+      const acts = el("div", "dk-tacts");
+      const playing = recPlayer && recPlayer.dataset.id === r.id && !recPlayer.paused;
+      const b = (txt, cls, fn, title) => { const x = el("button", "dk-btn dk-tbtn " + (cls || ""), txt); x.type = "button"; if (title) x.title = title; x.onclick = fn; acts.appendChild(x); return x; };
+      b(playing ? "❚❚" : "▷", "dk-round", () => previewRec(r), "Listen here (not on air)");
+      const dl = el("a", "dk-btn dk-tbtn", "⬇ MP3"); dl.href = recUrl(r, true); dl.title = "Download the MP3"; dl.setAttribute("download", ""); acts.appendChild(dl);
+      b("LOAD A", "dk-la", () => loadDeck("A", { key: "r:" + r.id, title: r.title, sub: "recorded show", url: recUrl(r), source: "rec" }, false), "Put this show on Deck A to replay it on air");
+      if (recCanManage || (me && r.by === me.id)) b("🗑", "dk-round", () => deleteRec(r), "Delete this recording");
+      row.appendChild(acts);
+      box.appendChild(row);
+    });
+  }
+  function previewRec(r) {
+    if (recPlayer && recPlayer.dataset.id === r.id) { if (recPlayer.paused) recPlayer.play().catch(() => {}); else recPlayer.pause(); renderRecs(); return; }
+    if (recPlayer) recPlayer.pause();
+    recPlayer = new Audio(recUrl(r)); recPlayer.dataset.id = r.id;
+    recPlayer.onpause = recPlayer.onplay = recPlayer.onended = () => renderRecs();
+    recPlayer.play().catch(() => say("Tap ▷ again to listen.", true));
+    if (isMineLive()) say("Playing in your headphones only. It is not going on air.");
+  }
+  async function deleteRec(r) {
+    if (!confirm("Delete the recording “" + r.title + "”? This can't be undone.")) return;
+    try {
+      const res = await fetch("/api/recordings/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, id: r.id }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || "Couldn't delete.");
+      recs = j.recordings || []; byId("dkRecUsed").textContent = fmtMB(j.used) + " of " + fmtMB(j.max); renderRecs();
+    } catch (e) { say(e.message, true); }
+  }
+
   /* ================= going live ================= */
   function pickMime() {
     if (!window.MediaRecorder) return "";
@@ -589,7 +704,9 @@
     if (!recMime) return say("This browser can't broadcast. Use Chrome, Edge or Safari (iPhone: iOS 14.5 or newer).", true);
     if (!force && !wantLive && !confirm("Go live now? Everything on the mixer (decks, carts, TALK and CALLS) goes on air.")) return;
     wantLive = true;
-    send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: byId("dkTarget").value, force: !!force });
+    if (!shows) await loadShows();
+    send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: byId("dkTarget").value, force: !!force, record: recArmed, title: recTitle() });
+    recArmed = false;   // from here the server holds the recording (it carries on through reconnects)
     renderLive();
   }
   function startRecorder() {
@@ -616,7 +733,8 @@
   }
   function stopLive() {
     if (!wantLive && !(state && state.live && me && state.live.userId === me.id)) return;
-    if (!confirm("Stop the broadcast? Listeners go back to the fill-in music.")) return;
+    const recording = !!(state && state.live && state.live.rec);
+    if (!confirm("Stop the broadcast? Listeners go back to the fill-in music." + (recording ? "\n\nThe recording is saved as an MP3." : ""))) return;
     wantLive = false;
     send({ type: "bc-stop", token });
     stopRecorder(); keepAwake(false); renderLive();
@@ -659,8 +777,10 @@
       text = "🔴 LIVE " + since + " · " + where + (s.receiving ? "" : " · waiting for audio…") + (s.error ? "\n" + s.error : "");
     } else if (wantLive) text = "Starting…";
     else if (state && !state.famcastReady) text = "Off air · Famcast isn't set up on this server, so GO LIVE runs a preview.";
+    if (s && mine && s.rec) text += "\n● Recording " + fmtMB(s.rec.bytes);
     st.textContent = text;
     st.classList.toggle("bad", !!(s && mine && s.error));
+    renderRec();
   }
   setInterval(renderLive, 1000);
 
@@ -676,7 +796,13 @@
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") return;
       let d; try { d = JSON.parse(ev.data); } catch { return; }
-      if (d.type === "bc-state") { state = d; renderLive(); }
+      if (d.type === "bc-state") { state = d; if (d.recSeq && d.recSeq !== recSeqSeen) { recSeqSeen = d.recSeq; loadRecs(); } renderLive(); }
+      else if (d.type === "bc-note") say(d.text, !!d.bad);
+      else if (d.type === "bc-recorded") {
+        const r = d.rec;
+        say("✓ Recording saved: " + r.title + " (" + fmt(r.secs) + ", " + fmtMB(r.size) + "). Download it under Recordings.");
+        loadRecs();
+      }
       else if (d.type === "bc-ok") { liveSince = d.since; if (wantLive) startRecorder(); if (d.target === "preview") say(d.famcastReady ? "Live in PREVIEW: nothing goes to Famcast." : "Live in PREVIEW: Famcast isn't set up on this server yet. Press LISTEN to hear it."); else say("✓ You're live on Famcast."); renderLive(); }
       else if (d.type === "bc-error") {
         if (d.busy && wantLive && canTakeOver() && confirm(d.error + "\n\nTake over the broadcast?")) { goLive(true); return; }
@@ -737,6 +863,7 @@
     };
     byId("dkGo").onclick = () => { if (!wantLive) goLive(false); };
     byId("dkStop").onclick = stopLive;
+    byId("dkRec").onclick = toggleRec;
     byId("dkReload").onclick = () => { loadStationTracks(); loadCarts(); say("Playlist and carts reloaded."); };
     byId("dkRefresh").onclick = () => send({ type: "bc-hello", token });
     byId("dkSource").onchange = () => { tracksKey = ""; renderTracks(); };
@@ -786,7 +913,7 @@
       makeDeck("A"); makeDeck("B");
       build(root); wire();
       renderTracks(); renderCarts();
-      loadStationTracks(); loadCarts();
+      loadStationTracks(); loadCarts(); loadRecs(); loadShows();
       connect();
     },
     busy() { return wantLive; },

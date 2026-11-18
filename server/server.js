@@ -956,7 +956,7 @@ const httpServer = http.createServer(async (req, res) => {
   const portalHost = isPortalHost(req.headers.host);
 
   /* ---- On Air studio: preview stream and cart wall (server/broadcast.js) ---- */
-  if (p.startsWith("/api/broadcast/") || p.startsWith("/api/carts/") || p.startsWith("/carts/")) {
+  if (p.startsWith("/api/broadcast/") || p.startsWith("/api/carts/") || p.startsWith("/carts/") || p.startsWith("/api/recordings/")) {
     if (await bcm.onHttp(req, res, url, p)) return;
   }
 

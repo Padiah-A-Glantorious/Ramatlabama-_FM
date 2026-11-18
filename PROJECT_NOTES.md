@@ -140,6 +140,31 @@ Writes are atomic; corrupt files are backed up (`*.corrupt-*.bak`), never wiped.
 
 ---
 
+## 9b. 🔴 On Air studio (`desk.js`, `desk.css`, `audiohub.js`, `server/broadcast.js`)
+
+- A broadcast desk inside the portal, so presenters can go live from a phone (no
+  Miradio TAB needed): Deck A / Deck B (waveform, CUE, PLAY, stop, load, eject),
+  mixer (CH A, CH B, MIC, CALLS + meters, crossfader), TALK + TALK-OVER, AUTO NEXT,
+  playlist (station music + your own files), cart wall (jingles, SFX, clips, ads).
+- **On air** = decks + carts + MIC (when TALK is on) + CALLS. **Headphones** = the same
+  without your own mic. **Callers hear** you, the other callers and the music.
+- **GO LIVE:** the page records the mix (MediaRecorder) and streams it over the
+  WebSocket; the server converts it with ffmpeg (`ffmpeg-static`) to MP3 and sends it
+  to Famcast as an Icecast source (HTTP PUT). One presenter live at a time; managers
+  can take over. Reconnects by itself after a blip (short gap on air).
+- **Render env vars:** `FAMCAST_SOURCE_PASSWORD` (required to really go live),
+  optional `FAMCAST_SOURCE_URL` (default `https://sv2.famcast.co.za:8845/stream`) and
+  `FAMCAST_SOURCE_USER` (default `source`). Without the password GO LIVE runs a
+  **preview** only; staff hear it with LISTEN (`/api/broadcast/listen`).
+- Miradio and the portal can't both be live on the same Famcast mount: stop one first
+  (the studio shows "Famcast is busy" and keeps retrying).
+- Phones: keep the studio on screen while live (screen is kept awake; going to the
+  background may pause the broadcast).
+- YouTube links can't go on air (browsers can't capture them and YouTube's terms
+  forbid rebroadcasting): the decks play uploaded files only.
+
+---
+
 ## 10. Render tab (`render.js`, `display.js`)
 
 - Scripture (bible-api.com: KJV, WEB, BBE, Open English), custom text, pictures,

@@ -955,6 +955,11 @@ const httpServer = http.createServer(async (req, res) => {
   // (API routes and static assets like CSS/JS still resolve normally below.)
   const portalHost = isPortalHost(req.headers.host);
 
+  /* ---- On Air studio: preview stream and cart wall (server/broadcast.js) ---- */
+  if (p.startsWith("/api/broadcast/") || p.startsWith("/api/carts/") || p.startsWith("/carts/")) {
+    if (await bcm.onHttp(req, res, url, p)) return;
+  }
+
   /* ---- public: live content for the listener site ---- */
   if (p === "/api/content" && req.method === "GET") {
     return sendJson(res, 200, {
@@ -1546,6 +1551,11 @@ const LIVE_GRACE = 10 * 60 * 1000;// someone on air whose socket died (audio may
 const HOST_GRACE = 5 * 60 * 1000; // host's page lost its connection
 const rid = (n) => crypto.randomBytes(n).toString("hex");
 const isOpen = (w) => !!(w && w.readyState === 1);
+// On Air studio: going live to Famcast from the portal, and the cart wall (server/broadcast.js).
+const bcm = require("./broadcast")({
+  userFromToken, sanitize, sendTo, isOpen, allSockets: () => wss.clients, canManage, DATA_DIR,
+  sniffAudio, readRaw, readBody, sendJson, rid, AUDIO_MIME,
+});
 function callView(c) {
   return { id: c.id, kind: c.kind, name: c.name, userId: c.kind === "cohost" ? c.userId : undefined,
     since: c.since, liveSince: c.liveSince || 0, connected: isOpen(c.ws) };
@@ -1642,8 +1652,10 @@ wss.on("connection", (ws) => {
   ws.send(JSON.stringify(historyPayload()));
   ws.send(JSON.stringify({ type: "station", station: stationView() }));
   ws.send(JSON.stringify({ type: "system", text: "You joined the live chat." }));
-  ws.on("message", (raw) => {
+  ws.on("message", (raw, isBinary) => {
+    if (isBinary) return bcm.onBinary(ws, raw);   // audio from the On Air studio
     let d; try { d = JSON.parse(raw.toString()); } catch { return; }
+    if (typeof d.type === "string" && d.type.startsWith("bc-")) return bcm.onWs(ws, d);
 
     // Presenter/manager action: clear the chat history for everyone.
     if (d.type === "clear") {
@@ -1849,6 +1861,7 @@ wss.on("connection", (ws) => {
     else broadcast({ type: "chat", name, text, ts, who: cid ? whoOf(cid) : "" });
   });
   ws.on("close", () => {
+    bcm.onClose(ws);
     if (ws.inMeeting && ws.meetId) meetingLeave(ws.meetId, ws);   // the page rejoins by itself if it reconnects
     else if (ws.meetId && !meetSockets().some((w) => w !== ws && w.meetId === ws.meetId)) pushMeeting();   // went offline
     // Don't end calls here: the page reconnects and resumes (see call-resume / host-start).

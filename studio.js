@@ -20,7 +20,7 @@
 
   let ws = null, token = null, me = null, snap = null;
   let hosting = false;                 // this tab is the mixing desk
-  let ctx = null, hostMic = null, micSrc = null, master = null;
+  let ctx = null, hostMic = null, micSrc = null, master = null, micHeld = false;
   const peers = new Map();             // id -> person on the line (host side)
   const earlyRtc = new Map();          // rtc that arrived before the peer did
   let co = null, coInfo = {}, coSince = 0, coMuted = false, coCtx = null, coAn = null;
@@ -69,14 +69,18 @@
   /* ================= hosting: the mixing desk ================= */
   async function startHosting() {
     if (co) return toast("Leave your co-host call first.", true);
-    if (!confirm("Open the lines and host?\n\nWear HEADPHONES. Speakers would feed callers back into your microphone and onto the air (echo).\n\nThen share this tab into Miradio with TAB (tick 'Also share tab audio').")) return;
+    const deskNote = window.RFM_AUDIO && window.RFM_AUDIO.desk
+      ? "Callers go on air through the CALLS fader in the 🔴 On Air studio."
+      : "Then share this tab into Miradio with TAB (tick 'Also share tab audio'), or use the 🔴 On Air studio.";
+    if (!confirm("Open the lines and host?\n\nWear HEADPHONES. Speakers would feed callers back into your microphone and onto the air (echo).\n\n" + deskNote)) return;
     try {
-      ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
-      await ctx.resume();
-      hostMic = await navigator.mediaDevices.getUserMedia(MIC);
+      ctx = await window.RFM_AUDIO.resume();          // shared with the On Air studio
+      hostMic = await window.RFM_AUDIO.mic();
+      micHeld = true;
     } catch (_) { stopHub(); return toast("Microphone blocked. Allow it to host calls.", true); }
     micSrc = ctx.createMediaStreamSource(hostMic);   // goes to the people on the line only
-    master = ctx.createGain(); master.connect(ctx.destination);   // everyone on the line -> this tab -> TAB -> air
+    master = ctx.createGain();                       // everyone on the line
+    routeMaster();
     hosting = true;
     send({ type: "host-start", token, peers: [] });
     loop(); render();
@@ -89,10 +93,31 @@
   function stopHub() {
     hosting = false;
     [...peers.keys()].forEach((id) => removePeer(id));
-    if (hostMic) { hostMic.getTracks().forEach((t) => t.stop()); hostMic = null; }
-    if (ctx) { try { ctx.close(); } catch (_) {} ctx = null; }
+    if (micHeld) { window.RFM_AUDIO.releaseMic(); micHeld = false; }   // the On Air studio may still use it
+    hostMic = null;
+    try { if (master) master.disconnect(); } catch (_) {}
+    try { if (micSrc) micSrc.disconnect(); } catch (_) {}
+    ctx = null;                                      // shared: never closed here
     micSrc = master = null;
   }
+  // Callers go to the On Air studio's CALLS fader when it is open, otherwise to this
+  // tab's speakers (for sharing into Miradio with TAB).
+  function routeMaster() {
+    if (!master || !ctx) return;
+    try { master.disconnect(); } catch (_) {}
+    const desk = window.RFM_AUDIO.desk;
+    master.connect(desk ? desk.callsIn : ctx.destination);
+  }
+  // Callers hear the show's music too (when the On Air studio is open).
+  function feedMusic(p, on) {
+    const desk = window.RFM_AUDIO.desk;
+    if (!desk || !p.dest) return;
+    try { if (on) desk.musicOut.connect(p.dest); else desk.musicOut.disconnect(p.dest); } catch (_) {}
+  }
+  window.RFM_AUDIO.onDesk((desk) => {
+    routeMaster();
+    if (desk) peers.forEach((p) => feedMusic(p, true));
+  });
   window.addEventListener("beforeunload", (e) => { if (hosting && peers.size) { e.preventDefault(); e.returnValue = ""; } });
 
   function addPeer(info) {
@@ -102,6 +127,7 @@
     p.dest = ctx.createMediaStreamDestination();
     micSrc.connect(p.dest);
     peers.forEach((q) => { if (q.gain) q.gain.connect(p.dest); });
+    feedMusic(p, true);
     peers.set(p.id, p);
     p.ready = (async () => {
       p.pc = new RTCPeerConnection({ iceServers: await getIce() });
@@ -149,6 +175,7 @@
     try { if (p.gain) p.gain.disconnect(); } catch (_) {}
     try { if (p.src) p.src.disconnect(); } catch (_) {}
     try { if (micSrc && p.dest) micSrc.disconnect(p.dest); } catch (_) {}
+    feedMusic(p, false);
     peers.forEach((q) => { try { if (q.gain && p.dest) q.gain.disconnect(p.dest); } catch (_) {} });
     if (p.keep) p.keep.srcObject = null;
     renderLine(); render();
@@ -292,7 +319,9 @@
     const h = snap && snap.host;
     btn.hidden = false; btn.disabled = false;
     if (hosting) {
-      st.textContent = "You're hosting from this tab. Share it into Miradio with TAB so callers go on air." + (h && !h.connected ? " (Reconnecting…)" : "");
+      st.textContent = (window.RFM_AUDIO.desk
+        ? "You're hosting from this tab. Callers go on air through the CALLS fader in 🔴 On Air."
+        : "You're hosting from this tab. Share it into Miradio with TAB so callers go on air, or open 🔴 On Air.") + (h && !h.connected ? " (Reconnecting…)" : "");
       btn.textContent = "⏹ Close the lines"; btn.className = "btn-danger";
     } else if (h && me && h.userId === me.id) {
       st.textContent = "You're hosting from another tab or device.";

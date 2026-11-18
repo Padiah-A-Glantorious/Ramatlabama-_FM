@@ -21,3 +21,6 @@ services:
         sync: false
       - key: PRESENTER_PASSWORD
         sync: false
+      # On Air studio: Famcast source password (set it in the Render dashboard).
+      - key: FAMCAST_SOURCE_PASSWORD
+        sync: false

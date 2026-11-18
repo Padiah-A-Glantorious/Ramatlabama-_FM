@@ -72,7 +72,8 @@
   // hosting the studio, not typing), otherwise show a "Refresh now" banner.
   function busyNow() {
     return inCall || joining || Date.now() - lastTyping < 2 * 60 * 1000 ||
-      !!(window.RFM_STUDIO && window.RFM_STUDIO.busy && window.RFM_STUDIO.busy());
+      !!(window.RFM_STUDIO && window.RFM_STUDIO.busy && window.RFM_STUDIO.busy()) ||
+      !!(window.RFM_DESK && window.RFM_DESK.busy && window.RFM_DESK.busy());   // never reload while live
   }
   function onBuild(v) {
     if (!v) return;

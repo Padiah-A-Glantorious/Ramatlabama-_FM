@@ -36,31 +36,54 @@
   let lastLiveErr = "", lastBusyBy = "";
 
   /* ================= markup ================= */
+  // A deck like a DJ app: number badge + title, LCD readouts (BPM / elapsed / remain),
+  // waveform, then pitch | turntable | hot cues (mirrored on deck 2) and the transport.
   function deckHtml(D) {
+    const n = D === "A" ? 1 : 2;
+    const pitch = `
+        <div class="dk-pitch">
+          <span class="dk-mini">PITCH</span>
+          <button type="button" class="dk-btn dk-sq" id="dkPitchUp${D}" title="Faster (+0.5%)">+</button>
+          <span class="dk-lcd dk-pitchval" id="dkPitch${D}" title="Double-click to reset">0.0%</span>
+          <button type="button" class="dk-btn dk-sq" id="dkPitchDn${D}" title="Slower (−0.5%)">−</button>
+          <button type="button" class="dk-btn dk-key on" id="dkKey${D}" aria-pressed="true" title="Keylock: the singer's pitch stays the same when you change the speed">KEYLOCK</button>
+        </div>`;
+    const hot = `
+        <div class="dk-hot">
+          <span class="dk-mini">HOT CUE</span>
+          ${[1, 2, 3].map((i) => `<button type="button" class="dk-btn dk-sq dk-hotbtn" id="dkHot${D}${i}" data-i="${i - 1}" title="Tap: mark this spot · tap again: jump to it · hold: clear">${i}</button>`).join("")}
+        </div>`;
     return `
     <section class="dk-card dk-deck" data-deck="${D}" id="dkDeck${D}">
       <div class="dk-deckhead">
+        <span class="dk-num">${n}</span>
         <div class="dk-deckinfo">
-          <div class="dk-decktag">DECK ${D}</div>
           <div class="dk-title" id="dkTitle${D}">Drop a playlist track or audio file</div>
-          <div class="dk-sub" id="dkSub${D}">EMPTY</div>
+          <div class="dk-sub" id="dkSub${D}">DECK ${n} · EMPTY</div>
         </div>
         <span class="dk-chip" id="dkState${D}">STANDBY</span>
-      </div>
-      <div class="dk-wave" id="dkWaveBox${D}"><canvas id="dkWave${D}"></canvas><span class="dk-wavehint" id="dkHint${D}">WAVEFORM READY</span></div>
-      <div class="dk-times">
-        <span class="dk-time" id="dkTime${D}">0:00</span>
-        <span class="dk-remain"><b id="dkRem${D}">-0:00</b><small id="dkTot${D}">0:00 TOTAL</small></span>
-      </div>
-      <div class="dk-controls">
-        <div class="dk-platter" id="dkPlat${D}"><i></i><span>${D}</span></div>
-        <button type="button" class="dk-btn dk-cue" id="dkCue${D}">↺ CUE</button>
-        <button type="button" class="dk-btn dk-play" id="dkPlay${D}">▷ PLAY</button>
-      </div>
-      <div class="dk-deckfoot">
-        <button type="button" class="dk-icon" id="dkHalt${D}" title="Stop">■</button>
         <label class="dk-icon" title="Load an audio file">📂<input type="file" accept="audio/*" hidden id="dkFile${D}" /></label>
         <button type="button" class="dk-icon" id="dkEject${D}" title="Eject">⏏</button>
+      </div>
+      <div class="dk-lcds">
+        <div class="dk-lcd"><small>BPM</small><b id="dkBpm${D}">—</b></div>
+        <div class="dk-lcd"><small>ELAPSED</small><b id="dkTime${D}">0:00</b></div>
+        <div class="dk-lcd"><small>REMAIN</small><b id="dkRem${D}">-0:00</b><i id="dkTot${D}">0:00 TOTAL</i></div>
+      </div>
+      <div class="dk-wave" id="dkWaveBox${D}"><canvas id="dkWave${D}"></canvas><span class="dk-wavehint" id="dkHint${D}">WAVEFORM READY</span></div>
+      <div class="dk-middle">
+        ${D === "A" ? pitch : hot}
+        <div class="dk-tt" id="dkTT${D}">
+          <div class="dk-vinyl" id="dkPlat${D}"><div class="dk-vlabel"><span>RAMATLABAMA FM</span><b>${n}</b></div></div>
+          <div class="dk-arm" aria-hidden="true"></div>
+        </div>
+        ${D === "A" ? hot : pitch}
+      </div>
+      <div class="dk-transport2">
+        <button type="button" class="dk-btn dk-cue" id="dkCue${D}" title="Back to the start (or the cue point), ready to go">CUE</button>
+        <button type="button" class="dk-btn dk-play" id="dkPlay${D}">▶ PLAY</button>
+        <button type="button" class="dk-btn dk-halt" id="dkHalt${D}" title="Stop">■</button>
+        <button type="button" class="dk-btn dk-sync" id="dkSync${D}" title="Match this deck's speed to the other deck's BPM">SYNC</button>
       </div>
     </section>`;
   }
@@ -355,10 +378,13 @@
     const label = d.loading ? "LOADING" : !d.track ? "STANDBY" : playing ? "ON AIR" : a.ended ? "ENDED" : a.currentTime > 0.05 ? "PAUSED" : "CUED";
     chip.textContent = label;
     chip.className = "dk-chip" + (playing ? " live" : d.track ? " ready" : "");
-    byId("dkPlay" + D).textContent = playing ? "❚❚ PAUSE" : "▷ PLAY";
+    byId("dkPlay" + D).textContent = playing ? "❚❚ PAUSE" : "▶ PLAY";
     byId("dkPlay" + D).classList.toggle("on", playing);
     byId("dkPlat" + D).classList.toggle("spin", playing);
+    byId("dkTT" + D).classList.toggle("play", playing);          // tonearm on the record
+    byId("dkTT" + D).classList.toggle("loaded", !!d.track);
     byId("dkDeck" + D).classList.toggle("playing", playing);
+    renderHot(d);
     renderTracks();
   }
   async function blobOf(t) {
@@ -374,9 +400,9 @@
     if (!d.audio.paused && d.track && !confirm("Deck " + D + " is playing “" + d.track.title + "”. Replace it?")) return;
     const job = ++d.loading;
     d.audio.pause();
-    d.track = t; d.peaks = null; d.cue = 0;
+    d.track = t; d.peaks = null; d.cue = 0; d.bpm = 0; d.hot = [null, null, null];
     byId("dkTitle" + D).textContent = t.title;
-    byId("dkSub" + D).textContent = t.sub || "";
+    byId("dkSub" + D).textContent = "DECK " + (D === "A" ? 1 : 2) + " · " + (t.sub || "");
     byId("dkHint" + D).textContent = "LOADING…"; byId("dkHint" + D).hidden = false;
     deckState(d); drawWave(D);
     if (t.source === "rec") {   // a recorded show: stream it from the server (too long to load whole or draw)
@@ -402,6 +428,7 @@
       const buf = await N.ctx.decodeAudioData(await blob.arrayBuffer());
       if (d.track !== t) return;
       d.peaks = peaksOf(buf, 600);
+      d.bpm = detectBpm(buf) || 0;   // 0 = no clear beat: the display shows "—"
       byId("dkHint" + D).hidden = true;
     } catch (_) { byId("dkHint" + D).textContent = "NO WAVEFORM"; }
     drawWave(D);
@@ -419,14 +446,84 @@
     if (max > 0) for (let i = 0; i < n; i++) out[i] /= max;
     return out;
   }
+  // Tempo of a song: onset energy at 200 Hz, autocorrelated over 70–180 BPM, on up to a
+  // minute from the middle of the song. Returns 0 when there's no clear beat (no guessing).
+  function detectBpm(buf) {
+    try {
+      const sr = buf.sampleRate, data = buf.getChannelData(0), rate = 200, hop = Math.floor(sr / rate);
+      const from = Math.floor(Math.min(buf.duration * 0.2, 30) * sr), to = Math.min(data.length, from + 60 * sr);
+      const n = Math.floor((to - from) / hop);
+      if (n < rate * 8) return 0;   // under 8 seconds: not enough to tell
+      const env = new Float32Array(n);
+      for (let i = 0; i < n; i++) { let s = 0; const a = from + i * hop; for (let j = 0; j < hop; j += 4) s += Math.abs(data[a + j]); env[i] = s; }
+      const on = new Float32Array(n);
+      for (let i = 1; i < n; i++) on[i] = Math.max(0, env[i] - env[i - 1]);
+      const lo = Math.floor(rate * 60 / 180), hi = Math.ceil(rate * 60 / 70);
+      const score = new Float32Array(hi + 2);
+      let best = 0, bestL = 0, sum = 0, cnt = 0;
+      for (let L = lo; L <= hi + 1; L++) {
+        let s = 0; for (let i = 0; i + L < n; i++) s += on[i] * on[i + L];
+        score[L] = s; if (L <= hi) { sum += s; cnt++; if (s > best) { best = s; bestL = L; } }
+      }
+      if (!best || best < (sum / cnt) * 1.35) return 0;   // no strong beat
+      const a = score[bestL - 1] || best, c = score[bestL + 1] || best;
+      const shift = (a - c) / (2 * (a - 2 * best + c) || 1);
+      let bpm = (rate * 60) / (bestL + (isFinite(shift) ? Math.max(-0.5, Math.min(0.5, shift)) : 0));
+      while (bpm < 75) bpm *= 2; while (bpm > 170) bpm /= 2;
+      return Math.round(bpm * 10) / 10;
+    } catch (_) { return 0; }
+  }
+  /* ---- pitch (speed), keylock, sync, hot cues ---- */
+  const PITCH_MAX = 8;   // ±8 %, like a turntable
+  function setPitch(D, pct) {
+    const d = decks[D];
+    pct = Math.max(-PITCH_MAX, Math.min(PITCH_MAX, Math.round(pct * 10) / 10));
+    d.pitch = pct;
+    d.audio.playbackRate = 1 + pct / 100;
+    byId("dkPitch" + D).textContent = (pct > 0 ? "+" : "") + pct.toFixed(1) + "%";
+    byId("dkPitch" + D).classList.toggle("moved", pct !== 0);
+  }
+  function setKeylock(D, on) {
+    const a = decks[D].audio;
+    a.preservesPitch = on; a.mozPreservesPitch = on; a.webkitPreservesPitch = on;
+    byId("dkKey" + D).classList.toggle("on", on); byId("dkKey" + D).setAttribute("aria-pressed", String(on));
+  }
+  function sync(D) {
+    const d = decks[D], o = decks[D === "A" ? "B" : "A"];
+    if (!d.bpm || !o.bpm) return say("SYNC needs a BPM on both decks. One of these songs has no clear beat.", true);
+    const target = o.bpm * (1 + (o.pitch || 0) / 100);
+    let cand = target;   // half/double time counts too (e.g. 64 vs 128)
+    [target / 2, target * 2].forEach((t) => { if (Math.abs(t - d.bpm) < Math.abs(cand - d.bpm)) cand = t; });
+    const pct = (cand / d.bpm - 1) * 100;
+    if (Math.abs(pct) > PITCH_MAX) return say("These songs are too far apart to sync (" + d.bpm.toFixed(1) + " vs " + target.toFixed(1) + " BPM).", true);
+    setPitch(D, pct);
+    say("Deck " + (D === "A" ? 1 : 2) + " synced to " + target.toFixed(1) + " BPM.");
+  }
+  function renderHot(d) {
+    for (let i = 0; i < 3; i++) {
+      const b = byId("dkHot" + d.D + (i + 1)); if (!b) continue;
+      const set = d.hot && d.hot[i] != null;
+      b.classList.toggle("set", set);
+      b.disabled = !d.track;
+      b.title = set ? "Hot cue " + (i + 1) + " at " + fmt(d.hot[i]) + ". Tap: jump · hold: clear" : "Tap: mark this spot as hot cue " + (i + 1);
+    }
+  }
+  function hotTap(D, i) {
+    const d = decks[D];
+    if (!d.track) return;
+    if (!d.hot) d.hot = [null, null, null];
+    if (d.hot[i] == null) { d.hot[i] = d.audio.currentTime; renderHot(d); return; }
+    try { d.audio.currentTime = d.hot[i]; } catch (_) {}
+    if (d.audio.paused) d.audio.play().catch(() => {});
+  }
   function eject(D) {
     const d = decks[D];
     if (!d.audio.paused && !confirm("Eject Deck " + D + " while it's playing?")) return;
     d.loading++; d.audio.pause(); d.audio.removeAttribute("src"); try { d.audio.load(); } catch (_) {}
     if (d.url) URL.revokeObjectURL(d.url);
-    d.url = ""; d.track = null; d.peaks = null;
+    d.url = ""; d.track = null; d.peaks = null; d.bpm = 0; d.hot = [null, null, null];
     byId("dkTitle" + D).textContent = "Drop a playlist track or audio file";
-    byId("dkSub" + D).textContent = "EMPTY";
+    byId("dkSub" + D).textContent = "DECK " + (D === "A" ? 1 : 2) + " · EMPTY";
     byId("dkHint" + D).textContent = "WAVEFORM READY"; byId("dkHint" + D).hidden = false;
     deckState(d); drawWave(D);
   }
@@ -478,10 +575,10 @@
     if (!d.peaks) return;
     const dur = d.audio.duration || 0, pos = dur ? d.audio.currentTime / dur : 0;
     const n = d.peaks.length, bw = w / n, mid = h / 2;
-    const col = getComputedStyle(byId("dkDeck" + D)).getPropertyValue("--deck").trim() || "#e0b64b";
+    const col = getComputedStyle(byId("dkDeck" + D)).getPropertyValue("--deck").trim() || "#2d8cff";
     for (let i = 0; i < n; i++) {
       const v = Math.max(0.02, d.peaks[i]) * (h * 0.46);
-      g.fillStyle = i / n <= pos ? col : "rgba(255,255,255,0.22)";
+      g.fillStyle = i / n <= pos ? col : "rgba(255,255,255,0.28)";
       g.fillRect(i * bw, mid - v, Math.max(1, bw - 0.6), v * 2);
     }
     g.fillStyle = "#fff"; g.fillRect(Math.round(pos * w), 0, 2, h);
@@ -501,7 +598,7 @@
     g.clearRect(0, 0, w, h);
     for (let i = 0; i < segs; i++) {
       const on = i < lit;
-      g.fillStyle = !on ? "rgba(255,255,255,0.08)" : i >= segs - 2 ? "#ff5a4f" : i >= segs - 5 ? "#f1cf72" : "#d4af37";
+      g.fillStyle = !on ? "rgba(255,255,255,0.07)" : i >= segs - 2 ? "#ff3b3b" : i >= segs - 5 ? "#f5d33b" : "#3be26b";   // green · yellow · red
       g.fillRect(0, h - (i + 1) * sh - i * gap, w, sh);
     }
   }
@@ -510,7 +607,7 @@
     const { w, h } = sizeCanvas(c), g = c.getContext("2d");
     g.clearRect(0, 0, w, h);
     g.fillStyle = "rgba(255,255,255,0.1)"; g.fillRect(0, 0, w, h);
-    const grd = g.createLinearGradient(0, 0, w, 0); grd.addColorStop(0, "#d4af37"); grd.addColorStop(0.8, "#f1cf72"); grd.addColorStop(1, "#ff5a4f");
+    const grd = g.createLinearGradient(0, 0, w, 0); grd.addColorStop(0, "#3be26b"); grd.addColorStop(0.75, "#f5d33b"); grd.addColorStop(1, "#ff3b3b");
     g.fillStyle = grd; g.fillRect(0, 0, w * v, h);
   }
   let lastWave = 0;
@@ -522,6 +619,7 @@
       byId("dkTime" + D).textContent = fmt(a.currentTime);
       byId("dkRem" + D).textContent = "-" + fmt(dur - a.currentTime);
       byId("dkTot" + D).textContent = fmt(dur) + " TOTAL";
+      byId("dkBpm" + D).textContent = d.bpm ? (d.bpm * (1 + (d.pitch || 0) / 100)).toFixed(1) : "—";
       byId("dkDeck" + D).classList.toggle("ending", !a.paused && dur > 0 && dur - a.currentTime < 15);
       drawMeter("dkMeter_" + D, N ? level(d.an) : 0);
     });
@@ -810,7 +908,7 @@
   function renderRecs() {
     const box = byId("dkRecList"); if (!box) return;
     box.innerHTML = "";
-    if (!recs.length) { box.appendChild(el("p", "dk-empty", "No recordings waiting. GO LIVE, then press ● REC to record.")); return; }
+    if (!recs.length) { box.appendChild(el("p", "dk-empty", "No recordings waiting. Press ● REC to record, live or not.")); return; }
     recs.forEach((r) => {
       const row = el("div", "dk-track dk-recrow");
       row.appendChild(el("span", "dk-idx", "🎙"));
@@ -989,6 +1087,22 @@
       byId("dkCue" + D).onclick = () => cue(D);
       byId("dkHalt" + D).onclick = () => halt(D);
       byId("dkEject" + D).onclick = () => eject(D);
+      byId("dkPitchUp" + D).onclick = () => setPitch(D, (decks[D].pitch || 0) + 0.5);
+      byId("dkPitchDn" + D).onclick = () => setPitch(D, (decks[D].pitch || 0) - 0.5);
+      byId("dkPitch" + D).ondblclick = () => setPitch(D, 0);
+      byId("dkKey" + D).onclick = () => setKeylock(D, !byId("dkKey" + D).classList.contains("on"));
+      byId("dkSync" + D).onclick = () => sync(D);
+      setPitch(D, 0); setKeylock(D, true);
+      // Hot cues: tap to set / jump, hold (0.6 s) to clear.
+      for (let i = 0; i < 3; i++) {
+        const b = byId("dkHot" + D + (i + 1));
+        let t = 0, held = false;
+        b.addEventListener("pointerdown", () => { held = false; t = setTimeout(() => { held = true; const d = decks[D]; if (d.hot && d.hot[i] != null) { d.hot[i] = null; renderHot(d); say("Hot cue " + (i + 1) + " cleared."); } }, 600); });
+        ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => b.addEventListener(ev, () => clearTimeout(t)));
+        b.addEventListener("click", () => { if (!held) hotTap(D, i); });
+        b.addEventListener("contextmenu", (e) => e.preventDefault());
+      }
+      renderHot(decks[D]);
       byId("dkFile" + D).onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; const before = tracks.length; if (addLocalFiles([f])) loadDeck(D, tracks[before], false); };
       const box = byId("dkWaveBox" + D);
       box.onclick = (e) => {

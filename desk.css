@@ -293,3 +293,191 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
   .dk-cartbar { flex-wrap: wrap; }
   .dk-cartbar input { max-width: none; }
 }
+
+/* ============================================================
+   DJ-APP THEME (like Virtual DJ): brushed dark metal, bevelled hardware buttons,
+   deck 1 blue / deck 2 red, black LCD readouts, spinning vinyl with a tonearm.
+   Everything above still applies; this only changes the look (and lays out the new
+   pitch / turntable / hot-cue row).
+   ============================================================ */
+body.desk-open { background: #0d0d0f; }
+body.desk-open .portal-body { background: transparent; }
+.dk {
+  --deck-a: #2d8cff; --deck-b: #e8262e; --mic: #e8e8ec; --calls: #3ecf8e; --live: #ff3b3b;
+  --text: #e6e6ea; --muted: #b4b4bb; --faint: #8a8a92;
+  --accent: #6aa8ff; --accent-2: #cfe2ff; --accent-soft: rgba(45, 140, 255, 0.15);
+  --dk-line: #0c0c0e; --dk-line2: rgba(255, 255, 255, 0.07);
+  --metal: linear-gradient(180deg, #3a3a3e 0%, #2b2b2f 45%, #232327 100%);
+  --metal-dark: linear-gradient(180deg, #232326 0%, #1a1a1d 100%);
+  background: #161618; border-radius: 12px; padding: 10px;
+  box-shadow: inset 0 0 0 1px #050506, 0 10px 30px rgba(0, 0, 0, .6);
+  font-family: "Segoe UI", "Inter", Roboto, Arial, sans-serif;
+}
+.dk-card {
+  background: var(--metal);
+  border: 1px solid #0a0a0c; border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .5);
+}
+.dk-label, .dk-mini, .dk-chname, .dk-xflab small, .dk-lcd small { color: #d9d9de; letter-spacing: 1.2px; text-shadow: 0 1px 0 #000; }
+/* hardware-style buttons */
+.dk-btn, .dk-pill, .dk-icon, .dk-micpick, .dk-chipbtn {
+  background: linear-gradient(180deg, #44444a 0%, #2e2e33 55%, #26262a 100%);
+  border: 1px solid #0b0b0d; color: #e2e2e6; border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(0, 0, 0, .7);
+  text-shadow: 0 1px 0 #000;
+}
+.dk-btn:hover, .dk-pill:hover, .dk-icon:hover { border-color: #0b0b0d; filter: brightness(1.15); }
+.dk-btn:active, .dk-pill:active, .dk-icon:active { box-shadow: inset 0 2px 4px rgba(0, 0, 0, .7); transform: translateY(1px); }
+.dk-btn.dk-smb { border-radius: 6px; }
+.dk select, .dk input[type="search"] { background: #0f0f11; border: 1px solid #000; border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .8); color: #e6e6ea; }
+.dk select:focus, .dk input[type="search"]:focus { border-color: var(--accent); }
+/* top bar */
+.dk-top { background: var(--metal-dark); }
+.dk-go { color: #bfeecf; background: linear-gradient(180deg, #2f5a40, #20402d); }
+.dk-go.on { background: linear-gradient(180deg, #ff4b4b 0%, #d01c1c 100%); color: #fff; border-color: #6d0b0b; box-shadow: 0 0 14px rgba(255, 40, 40, .45), inset 0 1px 0 rgba(255, 255, 255, .3); }
+.dk-rec { color: #ff8a80; }
+.dk-rec.on { background: linear-gradient(180deg, #e63232, #a51616); color: #fff; }
+.dk-mic { border-radius: 6px 0 0 6px; background: linear-gradient(180deg, #44444a, #26262a); border: 1px solid #0b0b0d; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16); }
+.dk-mic.on { background: linear-gradient(180deg, #2ad37f, #149150); border-color: #0a4d2b; color: #fff; box-shadow: 0 0 14px rgba(62, 207, 142, .5), inset 0 1px 0 rgba(255, 255, 255, .3); }
+.dk-micpick { border-radius: 0 6px 6px 0; }
+.dk-wifi { background: #0f0f11; border-color: #000; }
+
+/* ---- decks ---- */
+.dk-deck { gap: 8px; padding: 10px; }
+.dk-deck.playing { border-color: #0a0a0c; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--deck) 55%, transparent), 0 0 18px color-mix(in srgb, var(--deck) 18%, transparent); }
+.dk-deckhead { align-items: center; gap: 8px; }
+.dk-num {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 5px; display: grid; place-items: center;
+  font-weight: 900; font-size: 18px; color: #fff; background: linear-gradient(180deg, color-mix(in srgb, var(--deck) 85%, #fff), var(--deck));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 0 10px color-mix(in srgb, var(--deck) 45%, transparent);
+}
+.dk-deckinfo { flex: 1 1 auto; }
+.dk-title { margin-top: 0; font-size: 14.5px; color: #fff; }
+.dk-sub { color: #8f8f97; }
+.dk-chip { background: #0f0f11; border-color: #000; }
+.dk-chip.ready { color: var(--deck); }
+.dk-chip.live { background: var(--deck); color: #fff; border-color: transparent; }
+.dk-deckhead .dk-icon { width: 30px; height: 30px; flex: 0 0 30px; font-size: 13px; }
+/* LCD readouts */
+.dk-lcds { display: grid; grid-template-columns: 0.8fr 1fr 1fr; gap: 6px; }
+.dk-lcd {
+  background: linear-gradient(180deg, #050506, #0d0d10); border: 1px solid #000; border-radius: 5px;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, .9), 0 1px 0 rgba(255, 255, 255, .06);
+  padding: 4px 8px 5px; display: flex; flex-direction: column; align-items: flex-end; min-width: 0;
+}
+.dk-lcd small { font-size: 8.5px; font-weight: 800; color: #8a8a92; align-self: stretch; text-align: left; }
+.dk-lcd b { font-family: "Consolas", "SFMono-Regular", Menlo, monospace; font-size: clamp(17px, 1.8vw, 22px); font-weight: 700; color: #f2f2f5; font-variant-numeric: tabular-nums; letter-spacing: .5px; line-height: 1.1; text-shadow: 0 0 6px rgba(255, 255, 255, .25); }
+.dk-lcd i { font-style: normal; font-size: 9px; color: #6f6f77; font-family: "Consolas", monospace; }
+.dk-deck.ending .dk-lcd b#dkRemA, .dk-deck.ending .dk-lcd b#dkRemB { color: #ff4b4b; text-shadow: 0 0 8px rgba(255, 60, 60, .6); }
+.dk-deck.ending .dk-time { color: inherit; }
+/* waveform strip */
+.dk-wave { height: 56px; background: #050506; border: 1px solid #000; border-radius: 5px; box-shadow: inset 0 2px 6px rgba(0, 0, 0, .9); }
+/* pitch | turntable | hot cues */
+.dk-middle { display: grid; grid-template-columns: 64px minmax(0, 1fr) 64px; gap: 8px; align-items: center; }
+.dk-pitch, .dk-hot { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.dk-mini { font-size: 8.5px; font-weight: 800; }
+.dk-btn.dk-sq { width: 46px; height: 34px; padding: 0; border-radius: 6px; font-size: 15px; }
+.dk-pitchval { padding: 4px 4px; width: 60px; align-items: center; font-family: "Consolas", monospace; font-size: 12px; font-weight: 700; color: #f2f2f5; cursor: pointer; }
+.dk-pitchval.moved { color: var(--deck); }
+.dk-key { padding: 5px 4px; font-size: 8.5px; letter-spacing: .6px; width: 60px; }
+.dk-key.on { color: #fff; background: linear-gradient(180deg, color-mix(in srgb, var(--deck) 80%, #fff), var(--deck)); border-color: #000; }
+.dk-hotbtn.set { color: #fff; background: linear-gradient(180deg, color-mix(in srgb, var(--deck) 80%, #fff), var(--deck)); box-shadow: 0 0 10px color-mix(in srgb, var(--deck) 50%, transparent), inset 0 1px 0 rgba(255, 255, 255, .3); }
+.dk-hotbtn:disabled { opacity: .45; }
+/* the turntable */
+.dk-tt {
+  position: relative; width: min(100%, 210px); aspect-ratio: 1; margin: 0 auto; border-radius: 50%; padding: 7%;
+  background: radial-gradient(circle at 50% 40%, #4a4a50 0%, #2a2a2e 62%, #18181b 100%);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, .1), inset 0 -3px 8px rgba(0, 0, 0, .7), 0 6px 16px rgba(0, 0, 0, .6);
+}
+.dk-vinyl {
+  width: 100%; height: 100%; border-radius: 50%; position: relative;
+  background:
+    radial-gradient(circle, transparent 0 33%, rgba(0, 0, 0, 0) 33%),
+    repeating-radial-gradient(circle, #121214 0 1.5px, #1d1d20 1.5px 3px);
+  box-shadow: inset 0 0 0 3px #08080a, 0 3px 10px rgba(0, 0, 0, .7);
+}
+.dk-vinyl::after {   /* light catching the grooves */
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 20deg, rgba(255, 255, 255, 0) 0deg, rgba(255, 255, 255, .10) 30deg, rgba(255, 255, 255, 0) 70deg, rgba(255, 255, 255, 0) 180deg, rgba(255, 255, 255, .08) 210deg, rgba(255, 255, 255, 0) 250deg);
+}
+.dk-vlabel {
+  position: absolute; inset: 32%; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  background: radial-gradient(circle, #111 0 6%, color-mix(in srgb, var(--deck) 85%, #fff) 7%, var(--deck) 60%, color-mix(in srgb, var(--deck) 70%, #000) 100%);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, .5);
+}
+.dk-vlabel span { font-size: clamp(5px, .55vw, 7px); font-weight: 900; letter-spacing: .5px; color: rgba(255, 255, 255, .85); white-space: nowrap; }
+.dk-vlabel b { font-size: clamp(12px, 1.4vw, 17px); color: #fff; line-height: 1; }
+.dk-vinyl.spin { animation: dkSpin 1.8s linear infinite; }   /* 33⅓ rpm ≈ 1.8 s a turn */
+.dk-arm {   /* tonearm: rests off the record, swings on when the deck plays */
+  position: absolute; top: 6%; right: 6%; width: 7px; height: 56%; transform-origin: 50% 4px;
+  transform: rotate(-4deg); transition: transform .6s cubic-bezier(.3, .7, .3, 1);
+  background: linear-gradient(90deg, #8b8b92, #e9e9ee 45%, #8b8b92); border-radius: 4px; box-shadow: 1px 2px 4px rgba(0, 0, 0, .6);
+}
+.dk-arm::before { content: ""; position: absolute; top: -7px; left: 50%; width: 20px; height: 20px; margin-left: -10px; border-radius: 50%; background: radial-gradient(circle, #d8d8de, #5b5b62); box-shadow: 0 2px 4px rgba(0, 0, 0, .7); }
+.dk-arm::after { content: ""; position: absolute; bottom: -10px; left: 50%; width: 12px; height: 16px; margin-left: -6px; border-radius: 2px; background: linear-gradient(180deg, #e9e9ee, #77777e); }
+.dk-tt.loaded .dk-arm { transform: rotate(14deg); }
+.dk-tt.play .dk-arm { transform: rotate(22deg); }
+/* transport */
+.dk-transport2 { display: grid; grid-template-columns: 1fr 1.4fr auto 0.9fr; gap: 6px; }
+.dk-transport2 .dk-btn { padding: 12px 6px; font-size: 13px; letter-spacing: 1.5px; border-radius: 6px; }
+.dk-cue { color: #fff; }
+.dk-play { color: var(--deck); background: linear-gradient(180deg, #44444a, #26262a); }
+.dk-play.on { color: #fff; background: linear-gradient(180deg, color-mix(in srgb, var(--deck) 80%, #fff), var(--deck)); border-color: #000; box-shadow: 0 0 12px color-mix(in srgb, var(--deck) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, .3); }
+.dk-halt { width: 46px; }
+.dk-sync { color: var(--deck); }
+
+/* ---- mixer ---- */
+.dk-mixer { background: var(--metal-dark); }
+.dk-ch-A .dk-chname { color: var(--deck-a); } .dk-ch-B .dk-chname { color: var(--deck-b); }
+.dk-meter { background: #050506; border-radius: 2px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .9); }
+.dk-vslider { accent-color: #d9d9de; }
+.dk-ch-A .dk-vslider { accent-color: var(--deck-a); } .dk-ch-B .dk-vslider { accent-color: var(--deck-b); }
+.dk-xf input { accent-color: #d9d9de; }
+.dk-xf { background: #0f0f11; border: 1px solid #000; border-radius: 6px; padding: 6px 10px 4px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .8); }
+
+/* ---- lists, carts, lines, recordings: same metal ---- */
+.dk-track, .dk-lines .queue-row { background: linear-gradient(180deg, #2a2a2e, #222226); border: 1px solid #0b0b0d; border-radius: 6px; }
+.dk-track.on-a { box-shadow: inset 3px 0 0 var(--deck-a); }
+.dk-track.on-b { box-shadow: inset 3px 0 0 var(--deck-b); }
+.dk-tbtn { border-radius: 5px; }
+.dk-tbtn.dk-round { border-radius: 5px; }
+.dk-count { background: #0f0f11; border-color: #000; }
+.dk-cart { border-radius: 6px; background: linear-gradient(180deg, color-mix(in srgb, var(--cat) 22%, #2c2c30), color-mix(in srgb, var(--cat) 10%, #1d1d20)); border: 1px solid #0b0b0d; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12); }
+.dk-cart.firing { background: linear-gradient(180deg, color-mix(in srgb, var(--cat) 55%, #2c2c30), color-mix(in srgb, var(--cat) 30%, #1d1d20)); }
+.dk-chipbtn.on { color: #fff; background: linear-gradient(180deg, #4d7fd6, #2d5fb8); }
+.dk-msg { background: rgba(14, 14, 16, .96); border-color: #3b3b40; }
+.dk-settings label { color: #d9d9de; }
+
+/* ---- smaller screens: the new deck rows ---- */
+@media (max-width: 1180px) {
+  .dk-tt { width: min(100%, 190px); }
+}
+@media (max-width: 640px) {
+  .dk-middle { grid-template-columns: 58px minmax(0, 1fr) 58px; gap: 6px; }
+  .dk-tt { width: min(100%, 170px); }
+  .dk-btn.dk-sq { width: 44px; height: 32px; }
+  .dk-pitchval, .dk-key { width: 54px; }
+  .dk-lcd b { font-size: 17px; }
+  .dk-transport2 .dk-btn { padding: 13px 4px; font-size: 12px; }
+}
+
+/* the mixer fills the height of the decks (taller faders, no empty space) */
+.dk-mixer { justify-content: flex-start; min-height: 0; }
+.dk-faders { flex: 1 1 0; min-height: 190px; align-items: stretch; }
+.dk-fader { min-height: 0; }
+/* flex-basis 0 + overflow hidden: the meters never push the layout (they redraw at their
+   on-screen size, so letting them size the box would make it grow forever) */
+.dk-fbody { flex: 1 1 0; height: auto; min-height: 0; overflow: hidden; }
+.dk-meter { height: 100%; min-height: 0; display: block; }
+@media (max-width: 1180px) { .dk-faders { flex: 0 0 auto; height: 170px; min-height: 0; } }
+/* "Open the lines" as a hardware button: metal when closed, red when it means "close" */
+/* (!important: the site-wide gold .btn-primary style in styles.css uses !important too) */
+.dk-lines #hostToggleBtn.btn-primary {
+  color: #bfeecf !important; background: linear-gradient(180deg, #2f5a40, #20402d) !important; border: 1px solid #0b0b0d !important; border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 1px 2px rgba(0, 0, 0, .7) !important; text-shadow: 0 1px 0 #000 !important;
+}
+.dk-lines #hostToggleBtn.btn-danger {
+  color: #fff; background: linear-gradient(180deg, #e63232, #a51616); border: 1px solid #5a0909; border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 1px 2px rgba(0, 0, 0, .7);
+}
+.dk-lines .add-btn, .dk-lines .m-btn, .dk-lines .btn-danger:not(#hostToggleBtn) { border-radius: 6px; }

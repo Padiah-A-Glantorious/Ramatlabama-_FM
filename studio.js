@@ -16,6 +16,7 @@
   "use strict";
   const byId = (id) => document.getElementById(id);
   const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
+  const ask = (q, yes, no) => window.RFM_AUDIO.ask(q, yes, no);   // never confirm(): it freezes the page and the stream
   const MIC = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } };
 
   let ws = null, token = null, me = null, snap = null;
@@ -69,7 +70,7 @@
   /* ================= hosting: the mixing desk ================= */
   async function startHosting() {
     if (co) return toast("Leave your co-host call first.", true);
-    if (!confirm("Open the lines and take calls?\n\nWear HEADPHONES. Speakers would feed callers back into your microphone and onto the air (echo).\n\nCallers you put through go on air on the CALLS fader.")) return;
+    if (!(await ask("Open the lines and take calls?\n\nWear HEADPHONES. Speakers would feed callers back into your microphone and onto the air (echo).\n\nCallers you put through go on air on the CALLS fader.", "Open the lines", "Not now"))) return;
     try {
       if (window.RFM_DESK && window.RFM_DESK.wake) await window.RFM_DESK.wake();   // the studio's mixer must be running first
       ctx = await window.RFM_AUDIO.resume();          // shared with the On Air studio
@@ -83,8 +84,8 @@
     send({ type: "host-start", token, peers: [] });
     loop(); render();
   }
-  function stopHosting() {
-    if (peers.size && !confirm("Close the lines? Everyone on the line will be hung up.")) return;
+  async function stopHosting() {
+    if (peers.size && !(await ask("Close the lines? Everyone on the line will be hung up.", "Close the lines", "Keep open"))) return;
     send({ type: "host-stop" });
     stopHub(); render();
   }
@@ -362,7 +363,7 @@
     if (!callers.length) wrap.appendChild(el("p", "edit-empty", "No callers waiting."));
     callers.forEach((c) => wrap.appendChild(personRow(c, canPut ? [
       button("📞 Put through", "add-btn", () => send({ type: "call-accept", id: c.id }), full, full ? "The line is full" : ""),
-      button("✖", "m-btn delete", () => { if (confirm("Decline " + c.name + "'s call?")) send({ type: "call-end", id: c.id }); }, false, "Decline"),
+      button("✖", "m-btn delete", async () => { if (await ask("Decline " + c.name + "'s call?", "Decline", "Keep waiting")) send({ type: "call-end", id: c.id }); }, false, "Decline"),
     ] : [])));
     if (!canPut && callers.length) wrap.appendChild(el("p", "edit-hint", snap && snap.host ? "Only the host or a co-host on air can put callers through." : "Open the lines to take these calls."));
     const n = callers.length + (myInvite() ? 1 : 0);   // badge also lights up when you're being invited
@@ -391,7 +392,7 @@
         const act = el("div", "live-actions");
         act.append(
           button(p && p.muted ? "🔊 Unmute" : "🔇 Mute", "add-btn", () => toggleMute(c.id)),
-          button("⏹ Hang up", "btn-danger", () => { if (confirm("Hang up on " + c.name + "?")) { send({ type: "call-end", id: c.id }); removePeer(c.id); } }),
+          button("⏹ Hang up", "btn-danger", async () => { if (await ask("Hang up on " + c.name + "?", "Hang up", "Keep talking")) { send({ type: "call-end", id: c.id }); removePeer(c.id); } }),
         );
         box.appendChild(act);
       }
@@ -428,13 +429,13 @@
     const id = e.target && e.target.id;
     if (id === "hostToggleBtn") {
       if (hosting) stopHosting();
-      else if (snap && snap.host && me && snap.host.userId === me.id) { if (confirm("Host from this tab? Calls held by your other tab will end.")) startHosting(); }
+      else if (snap && snap.host && me && snap.host.userId === me.id) { ask("Host from this tab? Calls held by your other tab will end.", "Host here", "Cancel").then((yes) => { if (yes) startHosting(); }); }
       else startHosting();
     }
     if (id === "inviteBtn") invite();
     if (id === "ringAnswerBtn") answer();
     if (id === "ringDeclineBtn") decline();
-    if (id === "cohostLeaveBtn") { if (co && confirm("Leave the show?")) co.hangUp(); }
+    if (id === "cohostLeaveBtn" && co) ask("Leave the show?", "Leave", "Stay").then((yes) => { if (yes && co) co.hangUp(); });
     if (id === "cohostMuteBtn" && co) { coMuted = !coMuted; co.setMuted(coMuted); renderCohost(); }
   });
   setInterval(() => { if (snap && snap.callers.length) renderQueue(); }, 30000);   // refresh "x min waiting"

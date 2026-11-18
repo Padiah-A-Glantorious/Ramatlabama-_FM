@@ -80,6 +80,32 @@
       return next;
     },
     onMicChange(f) { micListeners.add(f); return () => micListeners.delete(f); },
+    // A question in the page (Yes / No) instead of the browser's confirm() box. confirm()
+    // freezes the page on phones: while it's open no audio is sent, so the live stream
+    // runs dry. This never blocks anything. Resolves true (yes) or false (no).
+    ask(message, yes, no) {
+      return new Promise((resolve) => {
+        let box = document.getElementById("rfmAsk");
+        if (box && box._done) box._done(false);   // a newer question replaces an open one
+        if (!box) {
+          box = document.createElement("div");
+          box.id = "rfmAsk"; box.className = "rfm-ask"; box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "false");
+          box.innerHTML = '<div class="rfm-ask-card"><p class="rfm-ask-text"></p><div class="rfm-ask-btns"><button type="button" class="rfm-ask-no"></button><button type="button" class="rfm-ask-yes"></button></div></div>';
+          document.body.appendChild(box);
+        }
+        box.querySelector(".rfm-ask-text").textContent = message;
+        box.querySelector(".rfm-ask-yes").textContent = yes || "Yes";
+        box.querySelector(".rfm-ask-no").textContent = no || "Cancel";
+        const done = (v) => { box._done = null; box.classList.remove("show"); document.removeEventListener("keydown", key, true); resolve(v); };
+        const key = (e) => { if (e.key === "Escape") done(false); if (e.key === "Enter") done(true); };
+        box._done = done;
+        box.querySelector(".rfm-ask-yes").onclick = () => done(true);
+        box.querySelector(".rfm-ask-no").onclick = () => done(false);
+        document.addEventListener("keydown", key, true);
+        box.classList.add("show");
+        setTimeout(() => { try { box.querySelector(".rfm-ask-yes").focus({ preventScroll: true }); } catch (_) {} }, 30);
+      });
+    },
     desk: null,   // set by desk.js: { callsIn: AudioNode, musicOut: AudioNode }
     setDesk(d) { this.desk = d; deskListeners.forEach((f) => { try { f(d); } catch (_) {} }); },
     onDesk(f) { deskListeners.add(f); return () => deskListeners.delete(f); },

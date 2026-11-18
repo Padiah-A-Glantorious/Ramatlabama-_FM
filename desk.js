@@ -17,6 +17,7 @@
   const byId = (id) => document.getElementById(id);
   const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
   function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+  const ask = (q, yes, no) => window.RFM_AUDIO.ask(q, yes, no);   // never confirm(): it freezes the page and the stream
   const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
   const faderGain = (v) => Math.pow(v / 100, 2) * 1.5625;   // 80% = unity, 100% = +4 dB
   const CART_CATS = [["all", "All"], ["jingles", "Jingles"], ["sfx", "SFX"], ["clips", "Clips"], ["ads", "Ads"]];
@@ -275,7 +276,8 @@
       d.fader = ctx.createGain(); d.fader.gain.value = faderGain(80);
       d.xf = ctx.createGain();
       d.an = an();
-      d.src.connect(d.fader); d.fader.connect(d.xf); d.xf.connect(N.duck); d.fader.connect(d.an);
+      d.soft = ctx.createGain();   // short fades on play / pause / seek (no clicks)
+      d.src.connect(d.soft); d.soft.connect(d.fader); d.fader.connect(d.xf); d.xf.connect(N.duck); d.fader.connect(d.an);
     });
     applyXfade(); applyDuck();
     window.RFM_AUDIO.setDesk({ callsIn: N.callsIn, musicOut: N.musicBus });   // callers now come through CALLS
@@ -415,7 +417,8 @@
     if (D === "B" && byId("dkDecks").value === "1") D = "A";
     const d = decks[D];
     await wake();
-    if (!d.audio.paused && d.track && !confirm("Deck " + D + " is playing “" + d.track.title + "”. Replace it?")) return;
+    if (!d.audio.paused && d.track && !(await ask("Deck " + D + " is playing “" + d.track.title + "”. Replace it?", "Replace", "Keep it"))) return;
+    if (!d.audio.paused) await softPause(d);   // fade out the song being replaced
     const job = ++d.loading;
     d.audio.pause();
     d.track = t; d.peaks = null; d.cue = 0; d.bpm = 0; d.hot = [null, null, null];
@@ -428,7 +431,7 @@
       d.audio.src = t.url; d.loading = 0;
       byId("dkHint" + D).textContent = "RECORDED SHOW";
       deckState(d);
-      if (autoplay) { try { await d.audio.play(); } catch (_) {} }
+      if (autoplay) await softPlay(d);
       return;
     }
     let blob;
@@ -439,7 +442,7 @@
     d.audio.src = d.url;
     d.loading = 0;
     deckState(d);
-    if (autoplay) { try { await d.audio.play(); } catch (_) {} }
+    if (autoplay) await softPlay(d);
     if (isPhone() && byId("dk").dataset.sec !== "deck") say("✓ “" + t.title + "” is on Deck " + (D === "A" ? "A" : "B") + (autoplay ? " and playing." : ". Open Deck to play it."));
     // Waveform: decode once, keep only the peaks. Very long files are skipped (phones run out of memory).
     if (blob.size > 25 * 1024 * 1024) { byId("dkHint" + D).textContent = "LONG TRACK"; return; }
@@ -532,12 +535,51 @@
     if (!d.track) return;
     if (!d.hot) d.hot = [null, null, null];
     if (d.hot[i] == null) { d.hot[i] = d.audio.currentTime; renderHot(d); return; }
-    try { d.audio.currentTime = d.hot[i]; } catch (_) {}
-    if (d.audio.paused) d.audio.play().catch(() => {});
+    if (d.audio.paused) { try { d.audio.currentTime = d.hot[i]; } catch (_) {} softPlay(d); }
+    else softSeek(d, d.hot[i]);
   }
-  function eject(D) {
+
+  /* ---- soft transport: never cut the sound dead (a hard stop or jump makes a click) ---- */
+  const FADE = 0.09;   // seconds
+  function rampSoft(d, to, secs) {
+    if (!d.soft) return;
+    const g = d.soft.gain, t = N.ctx.currentTime;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(to, t + secs);
+  }
+  async function softPlay(d) {
+    await wake();
+    if (d.soft) { d.soft.gain.cancelScheduledValues(N.ctx.currentTime); d.soft.gain.setValueAtTime(0, N.ctx.currentTime); }
+    clearTimeout(d.softT);
+    try { await d.audio.play(); } catch (e) { say("Tap PLAY again to start the sound.", true); return false; }
+    rampSoft(d, 1, FADE);
+    return true;
+  }
+  // Fade out, then pause (and optionally move the play head). Resolves once paused.
+  function softPause(d, seekTo) {
+    return new Promise((resolve) => {
+      clearTimeout(d.softT);
+      const finish = () => {
+        d.audio.pause();
+        if (seekTo != null) { try { d.audio.currentTime = seekTo; } catch (_) {} }
+        if (d.soft) { d.soft.gain.cancelScheduledValues(N.ctx.currentTime); d.soft.gain.setValueAtTime(1, N.ctx.currentTime); }
+        resolve();
+      };
+      if (!N || !d.soft || d.audio.paused) return finish();
+      rampSoft(d, 0, FADE);
+      d.softT = setTimeout(finish, FADE * 1000 + 15);
+    });
+  }
+  // Jump while playing: dip, move, come back up.
+  function softSeek(d, to) {
+    if (!N || !d.soft || d.audio.paused) { try { d.audio.currentTime = to; } catch (_) {} return; }
+    clearTimeout(d.softT);
+    rampSoft(d, 0, 0.04);
+    d.softT = setTimeout(() => { try { d.audio.currentTime = to; } catch (_) {} rampSoft(d, 1, 0.06); }, 45);
+  }
+  async function eject(D) {
     const d = decks[D];
-    if (!d.audio.paused && !confirm("Eject Deck " + D + " while it's playing?")) return;
+    if (!d.audio.paused && !(await ask("Eject Deck " + D + " while it's playing?", "Eject", "Keep playing"))) return;
+    await softPause(d);
     d.loading++; d.audio.pause(); d.audio.removeAttribute("src"); try { d.audio.load(); } catch (_) {}
     if (d.url) URL.revokeObjectURL(d.url);
     d.url = ""; d.track = null; d.peaks = null; d.bpm = 0; d.hot = [null, null, null];
@@ -550,16 +592,15 @@
     const d = decks[D];
     if (!d.track) return say("Load a track into Deck " + D + " first.", true);
     await wake();
-    if (d.audio.paused) { try { await d.audio.play(); } catch (_) { say("Tap PLAY again to start the sound.", true); } }
-    else d.audio.pause();
+    if (d.audio.paused) await softPlay(d);
+    else await softPause(d);
   }
   function cue(D) {          // back to the cue point, ready to go
     const d = decks[D];
     if (!d.track) return;
-    d.audio.pause();
-    try { d.audio.currentTime = d.cue || 0; } catch (_) {}
+    softPause(d, d.cue || 0);
   }
-  function halt(D) { const d = decks[D]; d.audio.pause(); try { d.audio.currentTime = 0; } catch (_) {} }
+  function halt(D) { softPause(decks[D], 0); }
   function autoNext(D) {
     const list = visibleTracks();
     if (!list.length) return;
@@ -576,7 +617,7 @@
         requestAnimationFrame(step);
       }
     };
-    if (!one && other.track && other.audio.paused && other.audio.currentTime < 0.1 && (!cur || other.track.key !== cur.key)) { other.audio.play().catch(() => {}); go(); return; }
+    if (!one && other.track && other.audio.paused && other.audio.currentTime < 0.1 && (!cur || other.track.key !== cur.key)) { softPlay(other); go(); return; }
     loadDeck(O, next, true).then(go);
   }
 
@@ -630,10 +671,17 @@
     g.fillStyle = grd; g.fillRect(0, 0, w * v, h);
   }
   let lastWave = 0;
+  // Screen updates: 15 a second on phones, 30 on computers, and nothing that isn't on
+  // screen is drawn (a busy page on a phone can make the sound stutter).
+  let lastFrame = 0;
+  const shown = (id) => { const e = byId(id); return !!e && e.offsetParent !== null; };
   function frame(t) {
     requestAnimationFrame(frame);
     if (document.hidden || !byId("tab-desk") || !byId("tab-desk").classList.contains("active")) return;
+    if (t - lastFrame < (isPhone() ? 66 : 33)) return;
+    lastFrame = t;
     ["A", "B"].forEach((D) => {
+      if (!shown("dkDeck" + D) && !shown("dkMeter_" + D)) return;
       const d = decks[D], a = d.audio, dur = isFinite(a.duration) ? a.duration : 0;
       byId("dkTime" + D).textContent = fmt(a.currentTime);
       byId("dkRem" + D).textContent = "-" + fmt(dur - a.currentTime);
@@ -642,12 +690,14 @@
       byId("dkWtR" + D).textContent = "-" + fmt(dur - a.currentTime);
       byId("dkBpm" + D).textContent = d.bpm ? (d.bpm * (1 + (d.pitch || 0) / 100)).toFixed(1) : "—";
       byId("dkDeck" + D).classList.toggle("ending", !a.paused && dur > 0 && dur - a.currentTime < 15);
-      drawMeter("dkMeter_" + D, N ? level(d.an) : 0);
+      if (shown("dkMeter_" + D)) drawMeter("dkMeter_" + D, N ? level(d.an) : 0);
     });
-    if (t - lastWave > 120) { lastWave = t; drawWave("A"); drawWave("B"); }
-    drawMeter("dkMeter_mic", N && micOn ? level(N.anMic) : 0);
-    drawMeter("dkMeter_calls", N ? level(N.anCalls) : 0);
-    drawBar("dkMaster", N ? level(N.anMaster) : 0);
+    if (t - lastWave > 120) { lastWave = t; if (shown("dkDeckA")) drawWave("A"); if (shown("dkDeckB")) drawWave("B"); }
+    if (shown("dkMeter_mic")) {
+      drawMeter("dkMeter_mic", N && micOn ? level(N.anMic) : 0);
+      drawMeter("dkMeter_calls", N ? level(N.anCalls) : 0);
+      drawBar("dkMaster", N ? level(N.anMaster) : 0);
+    }
     // cart progress
     cartPlaying.forEach((p, id) => {
       const tile = document.querySelector('.dk-cart[data-id="' + id + '"] .dk-cartprog');
@@ -787,7 +837,7 @@
     } catch (e) { say(e.message, true); }
   }
   async function deleteCart(c) {
-    if (!confirm("Delete the cart “" + c.title + "”?")) return;
+    if (!(await ask("Delete the cart “" + c.title + "”?", "Delete", "Keep"))) return;
     try {
       const r = await fetch("/api/carts/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, id: c.id }) });
       const j = await r.json();
@@ -830,14 +880,14 @@
   let solo = null;   // { ws, rec, since, stopping, chain }
   async function toggleRec() {
     if (solo) {
-      if (!confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
+      if (!(await ask("Stop recording? What's recorded so far is saved as an MP3.", "Stop recording", "Keep recording"))) return;
       return stopSolo();
     }
     if (!shows) await loadShows();
     const s = state && state.live;
     if (isMineLive()) {
       const on = !(s && s.rec);
-      if (!on && !confirm("Stop recording? What's recorded so far is saved as an MP3.")) return;
+      if (!on && !(await ask("Stop recording? What's recorded so far is saved as an MP3. The show stays live.", "Stop recording", "Keep recording"))) return;
       send({ type: "bc-record", token, on, title: recTitle() });
       if (on) say("● Recording the show. It's saved as an MP3 when you press REC again or go off air.");
       return;
@@ -943,8 +993,11 @@
       b(playing ? "❚❚" : "▷", "dk-round", () => previewRec(r), "Listen here (not on air)");
       const dl = el("a", "dk-btn dk-tbtn", "⬇ MP3"); dl.href = recUrl(r, true); dl.setAttribute("download", "");
       dl.title = "Download the MP3. Once it has downloaded it is removed from the server.";
-      dl.onclick = (e) => {
-        if (!confirm("Download “" + r.title + "”?\n\nWhen the download finishes, the recording is removed from the server to free up space. Keep the MP3 safe on your device.")) { e.preventDefault(); return; }
+      dl.onclick = async (e) => {
+        if (dl.dataset.ok === "1") { dl.dataset.ok = ""; return; }   // the confirmed click: let the browser download
+        e.preventDefault();
+        if (!(await ask("Download “" + r.title + "”?\n\nWhen the download finishes, the recording is removed from the server to free up space. Keep the MP3 safe on your device.", "Download", "Cancel"))) return;
+        dl.dataset.ok = "1"; dl.click();
         if (recPlayer && recPlayer.dataset.id === r.id) { recPlayer.pause(); recPlayer = null; }
         say("Downloading… The recording leaves this list when the download has finished.");
       };
@@ -964,7 +1017,7 @@
     if (isMineLive()) say("Playing in your headphones only. It is not going on air.");
   }
   async function deleteRec(r) {
-    if (!confirm("Delete the recording “" + r.title + "”? This can't be undone.")) return;
+    if (!(await ask("Delete the recording “" + r.title + "”? This can't be undone.", "Delete", "Keep"))) return;
     try {
       const res = await fetch("/api/recordings/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, id: r.id }) });
       const j = await res.json();
@@ -984,7 +1037,7 @@
     await wake();
     recMime = pickMime();
     if (!recMime) return say("This browser can't broadcast. Use Chrome, Edge or Safari (iPhone: iOS 14.5 or newer).", true);
-    if (!force && !wantLive && !confirm("Go live now? Everything on the mixer (decks, carts, TALK and CALLS) goes on air.")) return;
+    if (!force && !wantLive && !(await ask("Go live now? Everything on the mixer (decks, carts, TALK and CALLS) goes on air.", "Go live", "Not yet"))) return;
     wantLive = true;
     send({ type: "bc-start", token, kbps: Number(byId("dkQuality").value), target: "famcast", force: !!force });   // the server falls back to a preview if Famcast isn't set up
     renderLive();
@@ -1011,12 +1064,12 @@
   function stopRecorder() {
     if (rec) { const r = rec; rec = null; try { if (r.state !== "inactive") r.stop(); } catch (_) {} }
   }
-  function stopLive() {
+  async function stopLive() {
     if (!wantLive && !(state && state.live && me && state.live.userId === me.id)) return;
     const recording = !!(state && state.live && state.live.rec);
     const note = recording ? "\n\nThis also ends the recording (it's saved as an MP3). To stop only the recording, press ● REC instead."
       : solo ? "\n\nYour recording keeps going until you press ● REC." : "";
-    if (!confirm("End the live show? Listeners go back to the fill-in music." + note)) return;
+    if (!(await ask("End the live show? Listeners go back to the fill-in music." + note, "End live", "Stay live"))) return;
     wantLive = false;
     send({ type: "bc-stop", token });
     stopRecorder(); if (!solo) keepAwake(false); renderLive();   // an off-air recording keeps going
@@ -1089,7 +1142,10 @@
       }
       else if (d.type === "bc-ok") { liveSince = d.since; if (wantLive) startRecorder(); if (d.target === "preview") say(d.famcastReady ? "Live in PREVIEW: nothing goes to Famcast." : "Live in PREVIEW: Famcast isn't set up on this server yet. Press LISTEN to hear it."); else say("✓ You're live on Famcast."); renderLive(); }
       else if (d.type === "bc-error") {
-        if (d.busy && wantLive && canTakeOver() && confirm(d.error + "\n\nTake over the broadcast?")) { goLive(true); return; }
+        if (d.busy && wantLive && canTakeOver()) {
+          ask(d.error + "\n\nTake over the broadcast?", "Take over", "Cancel").then((yes) => { if (yes) goLive(true); else { wantLive = false; renderLive(); } });
+          return;
+        }
         wantLive = false; stopRecorder(); say(d.error, true); renderLive();
       }
       else if (d.type === "bc-ended") { if (wantLive || rec) { wantLive = false; stopRecorder(); keepAwake(false); if (d.reason) say(d.reason, true); } renderLive(); }
@@ -1133,7 +1189,7 @@
         const d = decks[D], dur = d.audio.duration;
         if (!d.track || !isFinite(dur)) return;
         const r = box.getBoundingClientRect();
-        try { d.audio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur; } catch (_) {}
+        softSeek(d, Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur);
       };
       const deckEl = byId("dkDeck" + D);
       deckEl.addEventListener("dragover", (e) => { e.preventDefault(); deckEl.classList.add("drop"); });
@@ -1181,10 +1237,10 @@
     byId("dkMicPick").onclick = () => { setSettings(true); byId("dkMicSel").focus(); };
     byId("dkMicSel").onchange = (e) => chooseMic(e.target.value);
     byId("dkSearch").oninput = renderTracks;
-    byId("dkClear").onclick = () => {
+    byId("dkClear").onclick = async () => {
       const n = tracks.filter((t) => t.source === "local").length;
       if (!n && !hidden.size) return;
-      if (!confirm("Clear the playlist? Your own files are removed and hidden station songs come back.")) return;
+      if (!(await ask("Clear the playlist? Your own files are removed and hidden station songs come back.", "Clear", "Keep"))) return;
       tracks = tracks.filter((t) => t.source !== "local"); hidden.clear(); tracksKey = ""; renderTracks();
     };
     byId("dkFiles").onchange = (e) => { addLocalFiles(e.target.files); e.target.value = ""; };

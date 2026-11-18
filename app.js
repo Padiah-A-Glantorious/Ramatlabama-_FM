@@ -46,7 +46,8 @@
   function setStatus(text) { if (statusEl) statusEl.textContent = text; }
   function setLive(on) {
     if (livePill)  livePill.classList.toggle("on", on);
-    if (liveLabel) liveLabel.textContent = on ? "LIVE" : "OFFLINE";
+    if (liveLabel) liveLabel.textContent = "LIVE";
+    if (livePill)  livePill.style.display = on ? "" : "none";
   }
 
   const streamUrl = (cfg.streamUrl || "").trim();
@@ -297,7 +298,8 @@
     if (!livePill || !liveLabel) return;
     const music = intent && (mode === "music" || mode === "yt") && isPlaying();
     livePill.classList.toggle("on", onAir === true || music);
-    liveLabel.textContent = onAir === true ? "LIVE" : music ? "MUSIC" : "OFFLINE";
+    liveLabel.textContent = onAir === true ? "LIVE" : "MUSIC";
+    livePill.style.display = (onAir === true || music) ? "" : "none";   // never show an "offline" label
   }
   function setButton() {
     if (!heroPlay) return;
@@ -404,7 +406,7 @@
   function offAirIdle() {    // nobody live and no music: wait and try again
     if (mode === "yt") parkYt();
     mode = "live"; following = false; curKey = "";
-    setStatus("We're off air right now. Back soon.");
+    setStatus("Music starts shortly…");
     setButton(); setPill();
     clearTimeout(retryTimer);
     retryTimer = setTimeout(() => { if (intent) go(); }, 30000);
@@ -417,7 +419,8 @@
     const was = onAir;
     onAir = live;
     setPill();
-    if (!intent || was === live || was === null) return;   // first answer only informs go()
+    if (!intent || was === live) return;
+    if (was === null && mode === null) return;   // first answer, nothing started yet: go() will use it
     if (live && mode !== "live") { setStatus("We're live! Switching…"); playStream(); }
     else if (!live && mode === "live") { if (!nextFill()) offAirIdle(); }
   }

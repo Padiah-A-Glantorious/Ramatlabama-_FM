@@ -7,7 +7,7 @@
      WhatsApp group call: it glows green while they talk and gold when their hand is up.
    - The screen shows the agenda PDF, or text / a picture a leader put up.
    Audio goes directly between the browsers in the room (WebRTC); the server only
-   relays the connection messages. Fine for a staff meeting (up to 16 people).
+   relays the connection messages. Fine for a staff meeting (everyone in the portal).
    ============================================================ */
 (() => {
   "use strict";
@@ -114,6 +114,7 @@
   }
   function leaveLocal(msg) {
     inCall = false; joining = false;
+    stopShare(true); closeView(); showOverlay(false);
     [...pcs.keys()].forEach(closePeer);
     if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
     meters.clear();
@@ -175,6 +176,7 @@
   }
   function flush(entry) { entry.queue.splice(0).forEach((c) => entry.pc.addIceCandidate(c).catch(() => {})); }
   async function onSignal(from, data) {
+    if (data.screen) return onScreenSignal(from, data);
     if (!inCall || !mic) return;
     try {
       if (data.sdp && data.sdp.type === "offer") {
@@ -199,6 +201,127 @@
   }
   const inMeeting = (id) => !!(st && st.people && st.people.some((p) => p.id === id));
 
+  /* ================= God Admin screen share =================
+     The God Admin shares a screen/window/tab with getDisplayMedia. Each other person in
+     the room gets it over its own video-only connection (separate from the audio ones).
+     While someone is sharing, everyone else sees ONLY that screen, filling their whole
+     display, with a small bar to mute, raise a hand, change fit/fill and leave. */
+  let shareStream = null;          // sharer: the captured screen
+  const sharePcs = new Map();      // sharer: viewerId -> connection
+  let viewPc = null, viewQueue = [], viewStream = null, viewShareId = "";
+  let overlay = null, fillMode = false;
+  async function startShare() {
+    if (!inCall || shareStream) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia)
+      return say("meetState", "This browser cannot share the screen. Use Chrome or Edge on a computer.", false);
+    try { shareStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false }); }
+    catch (_) { shareStream = null; return say("meetState", "Screen sharing was cancelled.", false); }
+    const tr = shareStream.getVideoTracks()[0];
+    if (tr) { try { tr.contentHint = "detail"; } catch (_) {} tr.onended = () => stopShare(); }
+    send({ type: "meeting-share", on: true });
+    say("meetState", "🖥 You are sharing your screen. Everyone in the room sees only it.", true);
+    render();
+  }
+  function stopShare(quiet) {
+    const was = !!shareStream;
+    if (shareStream) { shareStream.getTracks().forEach((t) => { t.onended = null; try { t.stop(); } catch (_) {} }); shareStream = null; }
+    [...sharePcs.keys()].forEach((id) => { try { sharePcs.get(id).close(); } catch (_) {} sharePcs.delete(id); });
+    if (was && !quiet) { send({ type: "meeting-share", on: false }); say("meetState", "Screen sharing stopped.", true); render(); }
+  }
+  async function makeSharePc(viewerId) {
+    const old = sharePcs.get(viewerId); if (old) { try { old.close(); } catch (_) {} }
+    const pc = new RTCPeerConnection({ iceServers: await ice() });
+    if (!shareStream) { pc.close(); return; }
+    sharePcs.set(viewerId, pc);
+    shareStream.getVideoTracks().forEach((t) => pc.addTrack(t, shareStream));
+    pc.onicecandidate = (e) => { if (e.candidate) send({ type: "meeting-signal", to: viewerId, data: { screen: true, ice: e.candidate } }); };
+    pc.onconnectionstatechange = () => { if (pc.connectionState === "closed" || pc.connectionState === "failed") { if (sharePcs.get(viewerId) === pc) sharePcs.delete(viewerId); } };
+    try {
+      await pc.setLocalDescription(await pc.createOffer());
+      send({ type: "meeting-signal", to: viewerId, data: { screen: true, sdp: pc.localDescription } });
+    } catch (_) {}
+  }
+  async function onScreenSignal(from, data) {
+    if (!inCall) return;
+    try {
+      if (data.screen === "want") { if (shareStream) makeSharePc(from); return; }
+      if (data.sdp && data.sdp.type === "offer") {             // viewer: the sharer is sending
+        if (!viewShareId || from !== viewShareId) return;
+        if (viewPc) { try { viewPc.close(); } catch (_) {} }
+        const pc = viewPc = new RTCPeerConnection({ iceServers: await ice() });
+        viewQueue = [];
+        pc.onicecandidate = (e) => { if (e.candidate) send({ type: "meeting-signal", to: from, data: { screen: true, ice: e.candidate } }); };
+        pc.ontrack = (e) => { viewStream = (e.streams && e.streams[0]) || new MediaStream([e.track]); attachView(); };
+        await pc.setRemoteDescription(data.sdp);
+        viewQueue.splice(0).forEach((c) => pc.addIceCandidate(c).catch(() => {}));
+        await pc.setLocalDescription(await pc.createAnswer());
+        send({ type: "meeting-signal", to: from, data: { screen: true, sdp: pc.localDescription } });
+      } else if (data.sdp && data.sdp.type === "answer") {      // sharer: a viewer answered
+        const pc = sharePcs.get(from);
+        if (pc) await pc.setRemoteDescription(data.sdp);
+      } else if (data.ice) {
+        const pc = shareStream ? sharePcs.get(from) : viewPc;
+        if (pc && pc.remoteDescription) await pc.addIceCandidate(data.ice).catch(() => {});
+        else if (!shareStream) viewQueue.push(data.ice);
+      }
+    } catch (_) {}
+  }
+  function closeView() {
+    if (viewPc) { try { viewPc.close(); } catch (_) {} viewPc = null; }
+    viewStream = null; viewQueue = [];
+    if (overlay) { const v = overlay.querySelector("video"); if (v) v.srcObject = null; }
+  }
+  function buildOverlay() {
+    if (overlay) return overlay;
+    overlay = el("div", "meet-share-overlay"); overlay.id = "meetShareOverlay"; overlay.hidden = true;
+    const v = el("video", "meet-share-video"); v.autoplay = true; v.muted = true; v.setAttribute("playsinline", "");
+    const msg = el("div", "meet-share-msg", "Connecting to the shared screen…");
+    const bar = el("div", "meet-share-bar");
+    const label = el("span", "meet-share-label", "");
+    const mk = (id, text, fn) => { const b = el("button", "m-btn", text); b.type = "button"; b.id = id; b.onclick = fn; return b; };
+    bar.append(label,
+      mk("shMute", "🔇 Mute", () => byId("meetMuteBtn").click()),
+      mk("shHand", "✋ Raise hand", () => byId("meetHandBtn").click()),
+      mk("shFit", "⤢ Fit", () => { fillMode = !fillMode; overlay.classList.toggle("fill", fillMode); byId("shFit").textContent = fillMode ? "⤡ Show all" : "⤢ Fill"; }),
+      mk("shLeave", "Leave", () => leave()));
+    overlay.append(v, msg, bar);
+    document.body.appendChild(overlay);
+    byId("shFit").textContent = "⤢ Fill";
+    return overlay;
+  }
+  function attachView() {
+    const o = buildOverlay(), v = o.querySelector("video");
+    if (viewStream) { v.srcObject = viewStream; v.play().catch(() => {}); }
+    o.classList.toggle("has-video", !!viewStream);
+  }
+  function showOverlay(on) {
+    if (!overlay && !on) return;
+    const o = buildOverlay();
+    o.hidden = !on;
+    document.body.classList.toggle("meet-sharing", !!on);
+    if (on) { try { if (!document.fullscreenElement && o.requestFullscreen) o.requestFullscreen().catch(() => {}); } catch (_) {} }
+    else if (document.fullscreenElement === o) { try { document.exitFullscreen(); } catch (_) {} }
+  }
+  // Called on every render: follow who is sharing (if anyone) and show / hide the full-screen view.
+  function syncShare() {
+    const s = st && st.sharing;
+    if (shareStream && !(s && s.id === me.id)) stopShare(true);   // the server says we are no longer the sharer
+    if (s && inCall && s.id !== me.id) {
+      if (viewShareId !== s.id) { closeView(); viewShareId = s.id; send({ type: "meeting-signal", to: s.id, data: { screen: "want" } }); }
+      const o = buildOverlay();
+      o.querySelector(".meet-share-label").textContent = "🖥 " + s.name + " is sharing their screen";
+      byId("shMute").textContent = muted ? "🎤 Unmute" : "🔇 Mute";
+      const mine = (st.people || []).find((p) => p.id === me.id);
+      byId("shHand").textContent = mine && mine.hand ? "✋ Lower hand" : "✋ Raise hand";
+      showOverlay(true);
+    } else {
+      if (viewShareId) { viewShareId = ""; closeView(); }
+      showOverlay(false);
+    }
+  }
+  // Ask again if the picture hasn't arrived (lost message, sharer reconnecting).
+  setInterval(() => { if (viewShareId && inCall && !viewStream) send({ type: "meeting-signal", to: viewShareId, data: { screen: "want" } }); }, 4000);
+  // A new person joined while sharing: they ask for the picture themselves (see syncShare).
   /* ================= talking glow ================= */
   function addMeter(id, stream) {
     if (!actx) return;
@@ -304,6 +427,11 @@
     byId("meetCount").textContent = people.length ? "(" + people.length + ")" : "";
     renderTiles();
     renderScreen();
+    const sb = byId("meetShareBtn");
+    sb.hidden = !(st.isGod && inCall);
+    sb.textContent = shareStream ? "⏹ Stop sharing screen" : "🖥 Share my screen";
+    sb.classList.toggle("on", !!shareStream);
+    syncShare();
   }
 
   function statusText() {
@@ -375,7 +503,7 @@
      exactly as wide as the screen, on any phone. Browsers' own PDF viewers don't do that
      (iPhones show page 1 only, many Android phones won't show it inside a page at all). */
   const PDFJS = "assets/pdfjs-3.11.174/";
-  let pdfLib = null, pdfDoc = null, pdfSrc = "", pdfJob = 0, pdfWidth = 0;
+  let pdfLib = null, pdfDoc = null, pdfSrc = "", pdfJob = 0, pdfWidth = 0, pdfMode = "";
   function loadPdfLib() {
     if (pdfLib) return pdfLib;
     pdfLib = new Promise((resolve, reject) => {
@@ -405,12 +533,72 @@
         pdfSrc = src;
       }
       if (job !== pdfJob) return;
+      // Pull the words out of the PDF and show them like the On Air table, in the site font.
+      let rows = [];
+      try { rows = await extractRows(pdfDoc, job); } catch (_) { rows = []; }
+      if (job !== pdfJob) return;
       status.remove();
+      if (rows.length) { pdfMode = "text"; drawText(pages, rows); return; }
+      pdfMode = "canvas";           // scanned / picture-only PDF: no words to extract, draw the pages
       await drawPages(pages, job);
     } catch (_) {
       if (job !== pdfJob) return;
       status.textContent = "The agenda couldn't be shown here. Press “↗ Open agenda” to read it.";
     }
+  }
+  /* ---- Words from the PDF, laid out like the On Air table ----
+     Text items are grouped into lines by their height on the page. Words that sit far
+     apart on a line become separate cells (time | show | host). Lines with one cell are
+     headings (if the letters are bigger than usual) or paragraphs. */
+  async function extractRows(doc, job) {
+    const rows = [], sizes = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const tc = await page.getTextContent();
+      if (job !== pdfJob) return [];
+      const items = tc.items
+        .filter((i) => typeof i.str === "string" && i.str.trim() !== "")
+        .map((i) => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width || 0, h: Math.abs(i.height || i.transform[3]) || 10 }));
+      items.sort((a, b) => (Math.abs(b.y - a.y) > 2 ? b.y - a.y : a.x - b.x));
+      const lines = [];
+      for (const it of items) {
+        const ln = lines.length ? lines[lines.length - 1] : null;
+        if (ln && Math.abs(ln.y - it.y) <= Math.max(2, ln.h * 0.5)) { ln.items.push(it); ln.h = Math.max(ln.h, it.h); }
+        else lines.push({ y: it.y, h: it.h, items: [it] });
+      }
+      for (const ln of lines) {
+        ln.items.sort((a, b) => a.x - b.x);
+        const cells = []; let prevEnd = null, cur = null;
+        for (const it of ln.items) {
+          const gap = prevEnd === null ? 0 : it.x - prevEnd;
+          if (cur === null || gap > ln.h * 1.2) { cur = { t: it.s }; cells.push(cur); }
+          else cur.t += (gap > ln.h * 0.15 && !/\s$/.test(cur.t) && !/^\s/.test(it.s) ? " " : "") + it.s;
+          prevEnd = it.x + it.w;
+        }
+        const texts = cells.map((c) => c.t.replace(/\s+/g, " ").trim()).filter(Boolean);
+        if (texts.length) { rows.push({ cells: texts, h: ln.h, page: n }); sizes.push(ln.h); }
+      }
+    }
+    if (!rows.length) return rows;
+    sizes.sort((a, b) => a - b);
+    const body = sizes[Math.floor(sizes.length / 2)] || 10;
+    rows.forEach((r) => { r.big = r.cells.length === 1 && r.h >= body * 1.25; });
+    return rows;
+  }
+  function drawText(pages, rows) {
+    pages.innerHTML = "";
+    const doc = el("div", "meet-doc");
+    let page = 0;
+    for (const r of rows) {
+      if (r.page !== page) { if (page) doc.appendChild(el("hr", "meet-doc-sep")); page = r.page; }
+      if (r.cells.length === 1) { doc.appendChild(el(r.big ? "h3" : "p", r.big ? "meet-doc-h" : "meet-doc-p", r.cells[0])); continue; }
+      const row = el("div", "sched-row meet-doc-row");
+      const n = r.cells.length;
+      row.style.gridTemplateColumns = n === 2 ? "auto 1fr" : "auto 1fr" + " auto".repeat(n - 2);
+      r.cells.forEach((c, i) => row.appendChild(el("span", i === 0 ? "sched-time" : i === 1 ? "sched-show" : "sched-host", c)));
+      doc.appendChild(row);
+    }
+    pages.appendChild(doc);
   }
   async function drawPages(pages, job) {
     const width = Math.max(200, Math.floor(pages.clientWidth || pages.parentNode.clientWidth || 600));
@@ -437,7 +625,7 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       const pages = byId("meetPdfPages");
-      if (!pages || !pdfDoc) return;
+      if (!pages || !pdfDoc || pdfMode !== "canvas") return;
       const w = Math.floor(pages.clientWidth);
       if (w && Math.abs(w - pdfWidth) > 30) { const job = ++pdfJob; drawPages(pages, job).catch(() => {}); }
     }, 250);
@@ -547,6 +735,7 @@
     document.addEventListener("input", () => { lastTyping = Date.now(); }, true);
     byId("updateNowBtn").onclick = () => location.reload();
     byId("meetEndBtn").onclick = () => { if (confirm("End the meeting for everyone?")) send({ type: "meeting-end" }); };
+    byId("meetShareBtn").onclick = () => { if (shareStream) stopShare(); else startShare(); };
     byId("meetMuteBtn").onclick = () => {
       muted = !muted;
       if (mic) mic.getAudioTracks().forEach((t) => { t.enabled = !muted; });

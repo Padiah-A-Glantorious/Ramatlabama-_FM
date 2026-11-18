@@ -414,3 +414,25 @@ a.m-btn { text-decoration: none; display: inline-block; }
 .meet-screen-card.full .meet-screen { flex: 1 1 auto; max-height: none; margin-top: 8px; }
 .meet-screen-card.full .meet-img { max-height: calc(100vh - 80px); }
 body.meet-full-open { overflow: hidden; }
+
+/* Agenda PDF shown as text, styled like the On Air table (site font) */
+.meet-doc { padding: 14px 16px; font-family: inherit; }
+.meet-doc-row { padding: 9px 11px; }
+.meet-doc-row .sched-time { min-width: 44px; }
+.meet-doc-row:nth-child(even) { background: rgba(255,255,255,0.04); }
+.meet-doc-h { margin: 14px 0 6px; font-size: clamp(16px, 2vw, 20px); font-weight: 800; color: var(--accent-2); }
+.meet-doc-p { margin: 4px 0; font-size: clamp(12.5px, 1.4vw, 14.5px); line-height: 1.5; }
+.meet-doc-sep { border: 0; border-top: 1px solid var(--glass-border); margin: 12px 0; }
+
+/* God Admin screen share: viewers see only the shared screen, edge to edge */
+.meet-share-overlay { position: fixed; inset: 0; z-index: 99999; background: #000; display: flex; align-items: center; justify-content: center; }
+.meet-share-overlay[hidden] { display: none; }
+.meet-share-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.meet-share-overlay.fill .meet-share-video { object-fit: cover; }
+.meet-share-msg { position: relative; color: #ddd; font-size: 15px; }
+.meet-share-overlay.has-video .meet-share-msg { display: none; }
+.meet-share-bar { position: absolute; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; max-width: 96vw; padding: 7px 10px; border-radius: 999px; background: rgba(15,15,18,0.78); border: 1px solid var(--glass-border); opacity: .35; transition: opacity .2s; }
+.meet-share-bar:hover, .meet-share-bar:focus-within { opacity: 1; }
+.meet-share-bar .m-btn { background: rgba(255,255,255,0.1); color: #fff; }
+.meet-share-label { color: #fff; font-size: 12.5px; font-weight: 700; padding: 0 6px; }
+body.meet-sharing { overflow: hidden; }

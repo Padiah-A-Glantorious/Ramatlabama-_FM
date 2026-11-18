@@ -326,7 +326,8 @@ const MEETING_DIR = path.join(DATA_DIR, "meeting");
 try { fs.mkdirSync(MEETING_DIR, { recursive: true }); } catch (_) {}
 const MEETING_PDF_MAX = 10 * 1024 * 1024;
 const MEETING_IMG_MAX = 4 * 1024 * 1024;
-const MEETING_MAX_PEOPLE = 16;
+// Room size = everyone with an account in the portal (so nobody is ever turned away).
+const meetingMax = () => Math.max(1, db.users.length);
 const MEETING_EMPTY_END = 30 * 60 * 1000;   // an empty meeting ends by itself after 30 minutes
 let meeting = loadJson(MEETING_FILE, { enabled: false, leaders: [], agenda: null, screen: { kind: "agenda" } });
 if (!Array.isArray(meeting.leaders)) meeting.leaders = [];
@@ -377,12 +378,13 @@ function meetingView(u) {
       presenter: canPresent(db.users.find((x) => x.id === p.id)),
     })),
     agenda: meeting.agenda ? { name: meeting.agenda.name, v: meeting.agenda.v } : null,
+    sharing: meetingLive && meetingLive.sharer && meetPeople.has(meetingLive.sharer) ? { id: meetingLive.sharer, name: meetPeople.get(meetingLive.sharer).name } : null,
     screen: { kind: sc.kind, title: sc.title || "", body: sc.body || "", v: sc.v || 0, by: sc.by || "" },
     leaders: god ? meeting.leaders : undefined,
     presenters: god ? meeting.presenters : undefined,
     // Leaders get the member list so they can call one person (● = portal open now).
     members: god || canLead(u) ? (() => { const on = portalOnline(); return db.users.map((x) => ({ id: x.id, name: x.name, title: x.title || "", role: x.role, online: on.has(x.id) })); })() : undefined,
-    max: MEETING_MAX_PEOPLE,
+    max: meetingMax(),
   };
 }
 function meetSockets() { return [...wss.clients].filter((w) => isOpen(w) && w.meetId); }
@@ -404,6 +406,7 @@ function meetingLeave(userId, ws) {
   const p = meetPeople.get(userId);
   if (!p || (ws && p.ws !== ws)) return;
   meetPeople.delete(userId);
+  if (meetingLive && meetingLive.sharer === userId) meetingLive.sharer = null;   // their screen share ends with them
   if (p.ws) p.ws.inMeeting = false;
   for (const o of meetPeople.values()) sendTo(o.ws, { type: "meeting-peer-left", id: userId });
   if (meetingLive && !meetPeople.size) meetingLive.emptySince = Date.now();
@@ -455,7 +458,7 @@ function handleMeeting(ws, u, d) {
     if (!meetingLive) return sendTo(ws, { type: "meeting-ended", by: "", reason: "There's no meeting right now." });
     if (!canJoinMeeting(u)) return err("This is a private call. A leader has to call you in.");
     const old = meetPeople.get(u.id);
-    if (!old && meetPeople.size >= MEETING_MAX_PEOPLE) return err("The meeting is full (" + MEETING_MAX_PEOPLE + " people).");
+    if (!old && meetPeople.size >= meetingMax()) return err("The meeting is full (" + meetingMax() + " people).");
     if (old && old.ws !== ws) {   // same person on another device / a reconnect: the newest one wins
       sendTo(old.ws, { type: "meeting-ended", by: "", reason: "You joined the meeting from another window." });
       if (old.ws) old.ws.inMeeting = false;
@@ -483,6 +486,12 @@ function handleMeeting(ws, u, d) {
   const p = meetPeople.get(u.id);
   if (!p || p.ws !== ws) return;               // the rest is for people in the room
   if (d.type === "meeting-leave") return meetingLeave(u.id, ws);
+  if (d.type === "meeting-share") {            // God Admin shares their screen with everyone in the room
+    if (u.role !== "god") return err("Only the God Admin can share their screen.");
+    if (d.on) meetingLive.sharer = u.id;
+    else if (meetingLive.sharer === u.id) meetingLive.sharer = null;
+    return pushMeeting();
+  }
   if (d.type === "meeting-signal") {
     const t = meetPeople.get(String(d.to || ""));
     if (t && d.data && typeof d.data === "object") sendTo(t.ws, { type: "meeting-signal", from: u.id, data: d.data });

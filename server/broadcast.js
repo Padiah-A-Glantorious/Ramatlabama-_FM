@@ -20,8 +20,8 @@
    ============================================================ */
 const fs = require("fs");
 const path = require("path");
-const http = require("http");
-const https = require("https");
+const net = require("net");
+const tls = require("tls");
 const { spawn } = require("child_process");
 
 module.exports = function setupBroadcast(h) {
@@ -241,63 +241,107 @@ module.exports = function setupBroadcast(h) {
     return onWsMain(ws, d);
   }
 
-  /* ---------------- Famcast (Icecast source over HTTP PUT) ---------------- */
+  /* ---------------- Famcast (Icecast "source" connection) ----------------
+     Done the way broadcast encoders (libshout, BUTT, Miradio) do it: one raw TCP/TLS
+     connection, a PUT request with "Expect: 100-continue", then the MP3 as one plain,
+     continuous body. Not node's http.request: that sends the body "chunked", which
+     Icecast doesn't understand (it drops the connection). Audio produced before Icecast
+     says "go ahead" is held briefly and sent as soon as it does. */
+  const ICE_HOLD_MAX = 256 * 1024;   // ~15 s at 128 kbps
   function iceWrite(chunk) {
     const ice = bc.ice;
     if (ice.fatal) return;
-    if (!ice.req) { if (Date.now() >= ice.retryAt) iceConnect(); else return; }
-    if (ice.req && ice.state !== "error") { try { ice.req.write(chunk); } catch (_) {} }
+    if (!ice.sock) { if (Date.now() >= ice.retryAt) iceConnect(); else return; }
+    if (!ice.sock) return;
+    if (ice.ready) { try { ice.sock.write(chunk); } catch (_) {} return; }
+    ice.hold.push(chunk); ice.held += chunk.length;
+    while (ice.held > ICE_HOLD_MAX && ice.hold.length) ice.held -= ice.hold.shift().length;   // keep the newest audio
   }
   function iceConnect() {
     const ice = bc.ice;
     let u;
     try { u = new URL(SRC_URL); } catch (_) { ice.state = "error"; ice.error = "FAMCAST_SOURCE_URL isn't a valid address."; ice.fatal = true; pushSoon(); return; }
-    const lib = u.protocol === "https:" ? https : http;
-    const req = lib.request({
-      hostname: u.hostname, port: u.port || (u.protocol === "https:" ? 443 : 80), path: u.pathname + u.search, method: "PUT",
-      headers: {
-        Authorization: "Basic " + Buffer.from(SRC_USER + ":" + SRC_PASS).toString("base64"),
-        "Content-Type": "audio/mpeg", "User-Agent": "RamatlabamaFM-Studio/1.0",
-        "Ice-Name": "Ramatlabama FM", "Ice-Description": "Live from the Ramatlabama FM studio",
-        "Ice-Public": "0", "Ice-Audio-Info": "bitrate=" + bc.kbps,
-      },
-    });
+    const secure = u.protocol === "https:";
+    const port = Number(u.port) || (secure ? 443 : 80);
     const show = bc;
-    ice.req = req; ice.state = "connecting"; ice.error = "";
-    const okTimer = setTimeout(() => { if (show === bc && ice.req === req && ice.state === "connecting") { ice.state = "on"; pushSoon(); } }, 6000);
+    const sock = secure ? tls.connect({ host: u.hostname, port, servername: u.hostname }) : net.connect({ host: u.hostname, port });
+    ice.sock = sock; ice.ready = false; ice.hold = []; ice.held = 0; ice.state = "connecting"; ice.error = "";
+    let head = "", answered = false, goTimer = 0;
+    const mine = () => show === bc && ice.sock === sock;
     const drop = (msg, retryMs, fatal) => {
-      clearTimeout(okTimer);
-      if (show !== bc || ice.req !== req) return;
-      ice.req = null; ice.state = "error"; ice.error = msg; ice.fatal = !!fatal;
-      ice.retryAt = Date.now() + (retryMs || 5000);
-      try { req.destroy(); } catch (_) {}
+      clearTimeout(timer); clearTimeout(goTimer);
+      if (!mine()) return;
+      ice.sock = null; ice.ready = false; ice.hold = []; ice.held = 0;
+      ice.state = "error"; ice.error = msg; ice.fatal = !!fatal; ice.retryAt = Date.now() + (retryMs || 5000);
+      try { sock.destroy(); } catch (_) {}
       pushSoon();
     };
-    req.on("response", (r) => {
-      if (r.statusCode >= 200 && r.statusCode < 300) {
-        clearTimeout(okTimer);
-        if (show === bc && ice.req === req) { ice.state = "on"; ice.error = ""; pushSoon(); }
-        r.on("end", () => drop("Famcast closed the connection. Reconnecting…", 2000));
-        r.resume();
-        return;
-      }
-      let body = "";
-      r.on("data", (c) => { body = (body + c.toString()).slice(0, 300); });
-      r.on("end", () => {
-        if (r.statusCode === 401) drop("Famcast refused the source password. Check FAMCAST_SOURCE_PASSWORD.", 0, true);
-        else if (r.statusCode === 403 || /in use/i.test(body)) drop("Famcast is busy: another studio (for example Miradio) is live on this stream. Stop it there; we keep trying.", 8000);
-        else drop("Famcast answered " + r.statusCode + ". Retrying…", 8000);
-      });
+    const timer = setTimeout(() => { if (!answered) drop("Famcast didn't answer (" + u.hostname + ":" + port + "). Retrying…", 5000); }, 10000);
+    sock.setNoDelay(true);
+    sock.setKeepAlive(true, 15000);
+    sock.on(secure ? "secureConnect" : "connect", () => {
+      if (!mine()) return;
+      const host = u.hostname + (u.port ? ":" + u.port : "");
+      sock.write([
+        "PUT " + (u.pathname || "/") + u.search + " HTTP/1.1",
+        "Host: " + host,
+        "Authorization: Basic " + Buffer.from(SRC_USER + ":" + SRC_PASS).toString("base64"),
+        "User-Agent: RamatlabamaFM-Studio/1.0",
+        "Content-Type: audio/mpeg",
+        "Ice-Name: Ramatlabama FM",
+        "Ice-Description: Live from the Ramatlabama FM studio",
+        "Ice-Public: 0",
+        "Ice-Audio-Info: bitrate=" + bc.kbps,
+        "Expect: 100-continue",
+        "", "",
+      ].join("\r\n"));
     });
-    req.on("error", (e) => drop("Can't reach Famcast (" + (e.code || e.message) + "). Retrying…", 5000));
-    req.flushHeaders();
+    // Famcast (Icecast KH) answers "100 Continue" first and only THEN checks the password:
+    // a "401" can follow straight after. So after a 100 we wait a moment for a refusal
+    // before sending audio; a 200 (or nothing more) means we're on.
+    const goAhead = () => {
+      if (!mine() || answered) return;
+      answered = true; clearTimeout(timer); clearTimeout(goTimer);
+      ice.ready = true; ice.state = "on"; ice.error = "";
+      const held = ice.hold; ice.hold = []; ice.held = 0;
+      for (const c of held) { try { sock.write(c); } catch (_) {} }
+      pushSoon();
+    };
+    const refuse = (code, first, text) => {
+      answered = true; clearTimeout(goTimer);
+      if (code === 401) drop("Famcast refused the source password (or the username). Check FAMCAST_SOURCE_PASSWORD and FAMCAST_SOURCE_USER.", 0, true);
+      else if (code === 403 || /in use|already/i.test(text)) drop("Famcast is busy: another studio (for example Miradio) is live on this stream. Stop it there; we keep trying.", 8000);
+      else if (code === 404) drop("Famcast doesn't know the mount " + u.pathname + ". Check FAMCAST_SOURCE_URL.", 0, true);
+      else drop("Famcast answered " + (code || JSON.stringify(first.slice(0, 40))) + (text ? " (" + text.trim().slice(0, 80) + ")" : "") + ". Retrying…", 8000);
+    };
+    sock.on("data", (buf) => {
+      if (!mine() || answered) return;   // once on air Icecast sends nothing we need
+      head += buf.toString("latin1");
+      if (head.length > 8192) return refuse(0, head.slice(0, 40), "");
+      // Read every complete reply so far ("100 Continue" may be followed by the real answer).
+      let rest = head, sawContinue = false;
+      for (;;) {
+        const end = rest.indexOf("\r\n\r\n");
+        if (end < 0) break;
+        const first = rest.split("\r\n")[0] || "";
+        const code = Number((first.match(/^(?:HTTP|ICE)\/\d(?:\.\d)?\s+(\d{3})/) || [])[1]);
+        const after = rest.slice(end + 4);
+        if (code === 100) { sawContinue = true; rest = after; continue; }
+        if (code >= 200 && code < 300) return goAhead();
+        return refuse(code, first, after);
+      }
+      if (sawContinue && !goTimer) goTimer = setTimeout(goAhead, 1200);   // no refusal after the 100: go
+    });
+    sock.on("error", (e) => drop("Can't reach Famcast (" + (e.code || e.message) + " on " + u.hostname + ":" + port + "). Retrying…", 5000));
+    sock.on("close", () => { if (mine()) drop(ice.ready ? "Famcast closed the connection. Reconnecting…" : "Famcast closed the connection before answering. Retrying…", 2000); });
     pushSoon();
   }
   function iceClose() {
-    if (!bc || !bc.ice.req) return;
-    try { bc.ice.req.end(); } catch (_) {}
-    try { bc.ice.req.destroy(); } catch (_) {}
-    bc.ice.req = null;
+    if (!bc || !bc.ice.sock) return;
+    const s = bc.ice.sock;
+    bc.ice.sock = null; bc.ice.ready = false; bc.ice.hold = []; bc.ice.held = 0;
+    try { s.end(); } catch (_) {}
+    setTimeout(() => { try { s.destroy(); } catch (_) {} }, 1500);
   }
 
   /* ---------------- the show ---------------- */
@@ -342,7 +386,7 @@ module.exports = function setupBroadcast(h) {
         const kbps = QUALITIES.includes(Number(d.kbps)) ? Number(d.kbps) : 128;
         const target = famcastReady() && d.target !== "preview" ? "famcast" : "preview";
         bc = { userId: u.id, name: sanitize(u.name, 40), ws, since: Date.now(), kbps, target, ff: null, ffError: "",
-          ice: { req: null, state: "off", error: "", retryAt: 0, fatal: false }, bytesIn: 0, bytesOut: 0, lastData: 0, goneAt: 0 };
+          ice: { sock: null, ready: false, hold: [], held: 0, state: "off", error: "", retryAt: 0, fatal: false }, bytesIn: 0, bytesOut: 0, lastData: 0, goneAt: 0 };
       }
       ws.bcOwner = true;
       sendTo(ws, { type: "bc-ok", target: bc.target, kbps: bc.kbps, since: bc.since, famcastReady: famcastReady() });

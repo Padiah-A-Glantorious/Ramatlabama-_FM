@@ -30,3 +30,8 @@ Thumbs.db
 # Meeting Room data (agenda PDFs / screen pictures live on the server disk, not committed)
 server/meeting.json
 server/meeting/
+# On Air studio data: recorded shows and the cart wall live on the server disk, not committed
+server/recordings.json
+server/recordings/
+server/carts.json
+server/carts/

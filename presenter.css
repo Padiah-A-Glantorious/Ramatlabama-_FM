@@ -452,7 +452,8 @@ body.meet-sharing { overflow: hidden; }
   .pres-topbar .welcome strong, .pres-topbar .welcome small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pres-topbar .access-badge { display: none; }
   .pres-topbar .btn-ghost { flex: 0 0 auto; white-space: nowrap; padding: 8px 11px; font-size: 12.5px; }
-  .menu-btn {
+  /* ☰ only on the On Air tab (body.desk-open); other tabs keep the buttons on top */
+  body.desk-open .menu-btn {
     display: inline-flex; flex-direction: column; justify-content: center; gap: 4px; position: relative;
     flex: 0 0 auto; width: 42px; height: 42px; padding: 0 11px; cursor: pointer;
     border-radius: 10px; border: 1px solid var(--glass-border); background: rgba(255, 255, 255, 0.06);
@@ -463,16 +464,16 @@ body.meet-sharing { overflow: hidden; }
   body.menu-open .menu-btn span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
   .menu-dot { position: absolute; top: 5px; right: 5px; width: 9px; height: 9px; border-radius: 50%; background: #3ecf8e; box-shadow: 0 0 0 2px #121214; }
   .menu-dot[hidden] { display: none; }
-  .portal-tabs {
+  body.desk-open .portal-tabs {
     position: fixed; top: 0; left: 0; bottom: 0; z-index: 60; width: min(78vw, 290px); max-width: none; margin: 0;
     flex-direction: column; flex-wrap: nowrap; gap: 6px; padding: 18px 14px; overflow-y: auto;
     background: #141416; border-right: 1px solid var(--glass-border); box-shadow: 8px 0 30px rgba(0, 0, 0, .6);
     transform: translateX(-105%); transition: transform .25s ease;
   }
-  body.menu-open .portal-tabs { transform: none; }
-  .portal-tabs .ptab { width: 100%; text-align: left; border-radius: 12px; padding: 13px 14px; font-size: 15px; }
+  body.desk-open.menu-open .portal-tabs { transform: none; }
+  body.desk-open .portal-tabs .ptab { width: 100%; text-align: left; border-radius: 12px; padding: 13px 14px; font-size: 15px; }
   .portal-tabs .ptab[hidden] { display: none; }
-  .menu-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .55); }
+  body.desk-open .menu-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .55); }
   .menu-backdrop[hidden] { display: none; }
   body.menu-open { overflow: hidden; }
 }

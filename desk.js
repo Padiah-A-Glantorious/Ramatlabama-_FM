@@ -70,7 +70,8 @@
         <div class="dk-lcd"><small>ELAPSED</small><b id="dkTime${D}">0:00</b></div>
         <div class="dk-lcd"><small>REMAIN</small><b id="dkRem${D}">-0:00</b><i id="dkTot${D}">0:00 TOTAL</i></div>
       </div>
-      <div class="dk-wave" id="dkWaveBox${D}"><canvas id="dkWave${D}"></canvas><span class="dk-wavehint" id="dkHint${D}">WAVEFORM READY</span></div>
+      <div class="dk-wave" id="dkWaveBox${D}"><canvas id="dkWave${D}"></canvas><span class="dk-wavehint" id="dkHint${D}">WAVEFORM READY</span>
+        <span class="dk-wtime"><b id="dkWtE${D}">0:00</b><b id="dkWtR${D}">-0:00</b></span></div>
       <div class="dk-middle">
         ${D === "A" ? pitch : hot}
         <div class="dk-tt" id="dkTT${D}">
@@ -636,6 +637,8 @@
       byId("dkTime" + D).textContent = fmt(a.currentTime);
       byId("dkRem" + D).textContent = "-" + fmt(dur - a.currentTime);
       byId("dkTot" + D).textContent = fmt(dur) + " TOTAL";
+      byId("dkWtE" + D).textContent = fmt(a.currentTime);          // phones: time on the waveform
+      byId("dkWtR" + D).textContent = "-" + fmt(dur - a.currentTime);
       byId("dkBpm" + D).textContent = d.bpm ? (d.bpm * (1 + (d.pitch || 0) / 100)).toFixed(1) : "—";
       byId("dkDeck" + D).classList.toggle("ending", !a.paused && dur > 0 && dur - a.currentTime < 15);
       drawMeter("dkMeter_" + D, N ? level(d.an) : 0);
@@ -1205,6 +1208,8 @@
     // The studio needs the whole width of the screen.
     document.querySelectorAll(".ptab").forEach((t) => t.addEventListener("click", () => {
       document.body.classList.toggle("desk-open", t.dataset.tab === "desk");
+      if (t.dataset.tab !== "desk") document.body.classList.remove("menu-open");   // ☰ only exists on On Air
+      setTimeout(fitPhone, 60);
       if (t.dataset.tab === "desk") { tracksKey = ""; renderTracks(); setTimeout(() => { drawWave("A"); drawWave("B"); }, 50); }
     }));
     // Callers waiting (studio.js keeps the count on the On Air tab's badge).
@@ -1228,6 +1233,7 @@
     byId("dkMnav").querySelectorAll("button").forEach((b) => { const on = b.dataset.sec === sec; b.classList.toggle("on", on); b.setAttribute("aria-current", on ? "page" : "false"); });
     if (sec === "list") { tracksKey = ""; renderTracks(); }
     if (sec === "deck") setTimeout(() => { drawWave("A"); drawWave("B"); }, 30);
+    fitPhone();
     if (sec === "settings") fillMics(true);
     if (isPhone()) window.scrollTo({ top: 0 });
   }
@@ -1236,8 +1242,36 @@
     if (sub === "B" && byId("dkDecks").value === "1") sub = "A";
     dk.dataset.sub = sub;
     byId("dkMsub").querySelectorAll("button").forEach((b) => { const on = b.dataset.sub === sub; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); });
+    fitPhone();
     setTimeout(() => { drawWave("A"); drawWave("B"); }, 30);
   }
+  // Phones, Deck tab: make the deck (or the mixer) fill the screen exactly, no scrolling.
+  // Measure how far the page runs past the bottom, then shrink the turntable / faders by
+  // that much (within limits). Still too tall: compact side columns, and measure again.
+  function fitPhone() {
+    const dk = byId("dk"); if (!dk) return;
+    const tab = byId("tab-desk");
+    if (!isPhone() || dk.dataset.sec !== "deck" || !tab || !tab.classList.contains("active")) {
+      dk.style.removeProperty("--tt"); dk.style.removeProperty("--fh"); dk.classList.remove("tight"); return;
+    }
+    const over = () => (document.scrollingElement || document.documentElement).scrollHeight - window.innerHeight;
+    const mixer = dk.dataset.sub === "mixer";
+    const prop = mixer ? "--fh" : "--tt", max = mixer ? 300 : 210, min = mixer ? 110 : 96;
+    dk.classList.remove("tight");
+    dk.style.setProperty(prop, max + "px");
+    let size = max;
+    for (let i = 0; i < 6; i++) {
+      const o = over();
+      if (o <= 0) break;
+      if (size - o >= min || mixer) { size = Math.max(min, size - o); dk.style.setProperty(prop, size + "px"); continue; }
+      if (!dk.classList.contains("tight")) { dk.classList.add("tight"); continue; }   // compact columns, then re-measure
+      size = min; dk.style.setProperty(prop, size + "px"); break;
+    }
+  }
+  let fitT = 0;
+  const fitSoon = () => { clearTimeout(fitT); fitT = setTimeout(fitPhone, 120); };
+  window.addEventListener("resize", fitSoon);
+  window.addEventListener("orientationchange", fitSoon);
 
   window.RFM_DESK = {
     start(tk, user) {

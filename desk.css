@@ -549,3 +549,54 @@ body.desk-open .portal-body { background: transparent; }
   .dk-msg { bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
   body.desk-open .portal-body { padding-bottom: 0; }
 }
+
+/* ---- elapsed / remaining written on the waveform (used on phones instead of the LCD boxes) ---- */
+.dk-wtime { display: none; position: absolute; inset: 0; justify-content: space-between; align-items: flex-end; padding: 2px 6px; pointer-events: none; }
+.dk-wtime b { font-family: "Consolas", "SFMono-Regular", Menlo, monospace; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 3px #000, 0 0 6px #000; }
+.dk-deck.ending .dk-wtime b:last-child { color: #ff5a5a; }
+
+/* ---- PHONES: the Deck tab fits the screen, no scrolling ---- */
+@media (max-width: 640px) {
+  body.desk-open .portal-body { padding: 6px 6px 0; }
+  .dk { padding: 6px 6px calc(78px + env(safe-area-inset-bottom, 0px)); }
+  .dk-main { gap: 8px; }
+  .dk-top { padding: 6px; gap: 6px; }
+  .dk-transport .dk-btn { padding: 10px 4px; }
+  .dk-mic, .dk-micpick { height: 36px; }
+  .dk-msub { margin: 0; gap: 6px; }
+  .dk-subbtn { padding: 4px 10px 5px; min-width: 62px; gap: 3px; font-size: 11px; }
+  /* the deck: no LCD boxes (time is on the waveform), a short waveform, tighter rows */
+  .dk-lcds { display: none; }
+  .dk-wave { height: 34px; }
+  .dk-wtime { display: flex; }
+  .dk-deck { gap: 6px; padding: 8px; }
+  .dk-deckhead { gap: 6px; }
+  .dk-num { width: 26px; height: 26px; font-size: 15px; }
+  .dk-title { font-size: 13.5px; }
+  .dk-sub { font-size: 9.5px; }
+  .dk-chip { font-size: 0; padding: 0; width: 12px; height: 12px; border-radius: 50%; flex: 0 0 12px; }   /* status as a dot */
+  .dk-chip::before { content: none; }
+  .dk-chip.ready { background: color-mix(in srgb, var(--deck) 55%, #222); }
+  .dk-chip.live { background: var(--deck); box-shadow: 0 0 8px var(--deck); }
+  .dk-deckhead .dk-icon { width: 28px; height: 28px; flex: 0 0 28px; }
+  .dk-middle { grid-template-columns: 54px minmax(0, 1fr) 54px; gap: 6px; }
+  .dk-pitch, .dk-hot { gap: 5px; }
+  .dk-btn.dk-sq { width: 42px; height: 30px; font-size: 14px; }
+  .dk-pitchval, .dk-key { width: 52px; }
+  /* the turntable (and the mixer's faders) take exactly the height that's left:
+     desk.js measures the screen and sets --tt / --fh */
+  .dk-tt { width: min(100%, var(--tt, 200px)); }
+  .dk-transport2 .dk-btn { padding: 10px 4px; font-size: 12px; }
+  .dk[data-sub="mixer"] .dk-faders { height: var(--fh, 240px); }
+  /* very short screens: the side columns get compact */
+  .dk.tight .dk-mini { display: none; }
+  .dk.tight .dk-btn.dk-sq { height: 26px; }
+  .dk.tight .dk-pitch, .dk.tight .dk-hot { gap: 4px; }
+  .dk.tight .dk-key { padding: 3px 2px; }
+  .dk.tight .dk-transport2 .dk-btn { padding: 8px 4px; }
+  /* messages float above the bottom tabs instead of taking room in the page */
+  .dk-msg { position: fixed; left: 50%; transform: translate(-50%, 6px); width: max-content; max-width: calc(100vw - 24px); z-index: 45; }
+  .dk-msg.show { transform: translate(-50%, 0); }
+  .dk-mnav { padding-top: 4px; }
+  .dk-mi { height: 28px; }
+}

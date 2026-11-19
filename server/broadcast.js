@@ -41,6 +41,7 @@ module.exports = function setupBroadcast(h) {
 
   let bc = null;   // the live show (one at a time)
   const previews = new Set();
+  let lastStopAt = 0;   // when we last told Famcast's source to go away (see the 403 retry below)
 
   const famcastReady = () => !!SRC_PASS;
   function view() {
@@ -310,7 +311,12 @@ module.exports = function setupBroadcast(h) {
     const refuse = (code, first, text) => {
       answered = true; clearTimeout(goTimer);
       if (code === 401) drop("Famcast refused the source password (or the username). Check FAMCAST_SOURCE_PASSWORD and FAMCAST_SOURCE_USER.", 0, true);
-      else if (code === 403 || /in use|already/i.test(text)) drop("Famcast is busy: another studio (for example Miradio) is live on this stream. Stop it there; we keep trying.", 8000);
+      else if (code === 403 || /in use|already/i.test(text)) {
+        // Right after END LIVE, Famcast can take a few seconds to notice the old connection
+        // dropped. Keep quietly retrying for a short while before calling it "busy".
+        const quiet = Date.now() - lastStopAt < 15000;
+        drop(quiet ? "Reconnecting to Famcast…" : "Famcast is busy: another studio (for example Miradio) is live on this stream. Stop it there; we keep trying.", quiet ? 1000 : 8000);
+      }
       else if (code === 404) drop("Famcast doesn't know the mount " + u.pathname + ". Check FAMCAST_SOURCE_URL.", 0, true);
       else drop("Famcast answered " + (code || JSON.stringify(first.slice(0, 40))) + (text ? " (" + text.trim().slice(0, 80) + ")" : "") + ". Retrying…", 8000);
     };
@@ -340,8 +346,12 @@ module.exports = function setupBroadcast(h) {
     if (!bc || !bc.ice.sock) return;
     const s = bc.ice.sock;
     bc.ice.sock = null; bc.ice.ready = false; bc.ice.hold = []; bc.ice.held = 0;
+    lastStopAt = Date.now();
+    // A graceful end() waits for Famcast to acknowledge, which can be slow; a prompt
+    // destroy() tells the OS to drop the TCP connection at once, so Famcast notices
+    // the source is gone sooner and frees the mount faster for the next GO LIVE.
     try { s.end(); } catch (_) {}
-    setTimeout(() => { try { s.destroy(); } catch (_) {} }, 1500);
+    setTimeout(() => { try { s.destroy(); } catch (_) {} }, 300);
   }
 
   /* ---------------- the show ---------------- */

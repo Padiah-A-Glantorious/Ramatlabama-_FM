@@ -128,7 +128,10 @@
           <label class="dk-micsel">Microphone
             <span class="dk-microw"><select id="dkMicSel" aria-label="Microphone"><option value="">Default microphone</option></select>
               <button type="button" class="dk-icon" id="dkMicRefresh" title="Plugged something in? Refresh the list">↻</button></span>
-            <small id="dkMicNote"></small></label>
+            <small id="dkMicNote"></small>
+            <span class="dk-micraw"><input type="checkbox" id="dkMicRaw" /> Studio mic (no browser processing)</span>
+            <small id="dkMicRawNote">For a good external mic. Turns off echo cancellation, noise suppression and auto-gain, and allows stereo. Wear headphones: nothing cancels speaker echo in this mode.</small>
+          </label>
           <label>Decks<select id="dkDecks"><option value="2">2 decks</option><option value="1">1 deck</option></select></label>
           <label>Quality<select id="dkQuality">
             <option value="64">Low (64 kbps)</option><option value="96">Medium (96 kbps)</option>
@@ -380,6 +383,15 @@
     } catch (_) { say("That microphone couldn't be opened. Check it's plugged in.", true); fillMics(); }
   }
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", () => fillMics());
+  async function setMicRaw(on) {
+    if (on && !(await ask("Turn off the browser's microphone processing?\n\nUse this only with a good external mic through headphones. With speakers open, you'll hear your own voice echo back, because the browser is no longer cancelling it for you.", "Turn it off", "Cancel"))) {
+      byId("dkMicRaw").checked = false; return;
+    }
+    try {
+      await window.RFM_AUDIO.setRaw(on);
+      say(on ? "🎙 Studio mic mode on: no browser processing. Use headphones." : "🎙 Studio mic mode off: normal call-quality processing again.");
+    } catch (_) { say("Couldn't switch the microphone mode. Check it's plugged in.", true); byId("dkMicRaw").checked = !on; }
+  }
 
   /* ================= decks ================= */
   function makeDeck(D) {
@@ -1236,6 +1248,8 @@
     byId("dkGear").onclick = () => setSettings(byId("dkSettings").hidden);
     byId("dkMicPick").onclick = () => { setSettings(true); byId("dkMicSel").focus(); };
     byId("dkMicSel").onchange = (e) => chooseMic(e.target.value);
+    byId("dkMicRaw").checked = window.RFM_AUDIO.isRaw();
+    byId("dkMicRaw").onchange = (e) => setMicRaw(e.target.checked);
     byId("dkSearch").oninput = renderTracks;
     byId("dkClear").onclick = async () => {
       const n = tracks.filter((t) => t.source === "local").length;

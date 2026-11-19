@@ -15,14 +15,28 @@
    ============================================================ */
 (() => {
   "use strict";
+  // Default: the browser's call-quality processing (echo cancellation, noise suppression,
+  // auto-gain, mono). Right for a laptop/headset mic sitting near speakers.
+  // "Studio mic" mode turns all of that off: a good external mic (USB condenser, XLR
+  // interface) sounds thinner, pumped or gated with it on, because those filters are tuned
+  // for voice calls, not broadcast audio. Turning it off needs headphones (no open speakers),
+  // since the browser is no longer cancelling any echo for you.
+  const RAW = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
   const BASE = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
-  const KEY = "rfm_mic";
+  const KEY = "rfm_mic", RAW_KEY = "rfm_mic_raw";
   let ctx = null, mic = null, micPromise = null, micUsers = 0;
-  let deviceId = "";
-  try { deviceId = localStorage.getItem(KEY) || ""; } catch (_) {}
+  let deviceId = "", rawMode = false;
+  try { deviceId = localStorage.getItem(KEY) || ""; rawMode = localStorage.getItem(RAW_KEY) === "1"; } catch (_) {}
   const deskListeners = new Set(), micListeners = new Set();
 
-  const constraints = (id) => ({ audio: id ? { ...BASE, deviceId: { exact: id } } : { ...BASE }, video: false });
+  const constraints = (id) => ({
+    audio: {
+      ...(rawMode ? RAW : BASE),
+      ...(rawMode ? { channelCount: { ideal: 2 } } : {}),   // let a stereo interface stay stereo; mono mics just give one channel back
+      ...(id ? { deviceId: { exact: id } } : {}),
+    },
+    video: false,
+  });
   async function open() {
     try { return await navigator.mediaDevices.getUserMedia(constraints(deviceId)); }
     catch (e) {
@@ -67,10 +81,7 @@
     },
     deviceId() { return deviceId; },
     currentLabel() { const t = mic && mic.getAudioTracks()[0]; return t ? t.label : ""; },
-    // Use another microphone. If the mic is open now, swap it for everyone using it.
-    async setDevice(id) {
-      deviceId = id || "";
-      try { if (deviceId) localStorage.setItem(KEY, deviceId); else localStorage.removeItem(KEY); } catch (_) {}
+    async reopen() {   // re-request the current device with the current constraints (mode change)
       if (!live(mic) || !micUsers) return null;
       const old = mic;
       const next = await open();
@@ -78,6 +89,20 @@
       micListeners.forEach((f) => { try { f(next); } catch (_) {} });
       old.getTracks().forEach((t) => t.stop());
       return next;
+    },
+    // Use another microphone. If the mic is open now, swap it for everyone using it.
+    async setDevice(id) {
+      deviceId = id || "";
+      try { if (deviceId) localStorage.setItem(KEY, deviceId); else localStorage.removeItem(KEY); } catch (_) {}
+      return this.reopen();
+    },
+    isRaw() { return rawMode; },
+    // Studio mic mode: no echo cancellation / noise suppression / auto-gain, up to stereo.
+    // Needs headphones: nothing is cancelling speaker echo any more.
+    async setRaw(on) {
+      rawMode = !!on;
+      try { localStorage.setItem(RAW_KEY, rawMode ? "1" : "0"); } catch (_) {}
+      return this.reopen();
     },
     onMicChange(f) { micListeners.add(f); return () => micListeners.delete(f); },
     // A question in the page (Yes / No) instead of the browser's confirm() box. confirm()

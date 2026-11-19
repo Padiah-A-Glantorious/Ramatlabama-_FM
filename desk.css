@@ -95,6 +95,8 @@ body.desk-open .portal-body { max-width: none; padding: clamp(8px, 1.2vw, 14px);
 .dk-settings label.dk-check { flex-direction: row; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; color: var(--muted); padding-bottom: 9px; }
 .dk-settings input[type="range"] { accent-color: var(--accent); }
 .dk-settings input[type="checkbox"], .dk-auto input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+.dk-micsel .dk-micraw { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; color: var(--muted); margin-top: 2px; }
+.dk-micsel #dkMicRawNote { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 10.5px; line-height: 1.4; color: var(--faint); }
 .dk-setbtns { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .dk-setbtns .dk-btn.on { color: #111; background: var(--accent-2); }
 

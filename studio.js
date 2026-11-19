@@ -333,8 +333,13 @@
     } else if (h && me && h.userId === me.id) {
       st.textContent = "You have the lines open on another tab or device.";
       btn.textContent = "📞 Take the lines here"; btn.className = "btn-primary";
+    } else if (h && !h.connected) {
+      // Their tab closed or dropped: let any presenter take over at once instead of
+      // waiting out the server's reconnect grace period.
+      st.textContent = h.name + "'s studio tab disconnected. Take over to open the lines yourself.";
+      btn.textContent = "📞 Take over the lines"; btn.className = "btn-primary"; btn.disabled = !!co;
     } else if (h) {
-      st.textContent = h.name + " is hosting." + (h.connected ? "" : " (Their studio tab is reconnecting.)") + (coLive() ? "" : " They can invite you to co-host.");
+      st.textContent = h.name + " is hosting." + (coLive() ? "" : " They can invite you to co-host.");
       btn.hidden = true;
     } else {
       st.textContent = "The lines are closed. Open them to take calls and co-hosts.";

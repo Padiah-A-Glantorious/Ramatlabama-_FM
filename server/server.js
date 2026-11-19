@@ -1548,7 +1548,7 @@ const MAX_ON_LINE = 8;            // people on the line with the host at once
 const MAX_WAITING = 40;
 const WAIT_GRACE = 2 * 60 * 1000; // a waiting caller who vanished is dropped after this
 const LIVE_GRACE = 10 * 60 * 1000;// someone on air whose socket died (audio may still flow)
-const HOST_GRACE = 5 * 60 * 1000; // host's page lost its connection
+const HOST_GRACE = 45 * 1000;      // host's page lost its connection (a presenter can take over at once; this only clears the stale record)
 const rid = (n) => crypto.randomBytes(n).toString("hex");
 const isOpen = (w) => !!(w && w.readyState === 1);
 // On Air studio: going live to Famcast from the portal, and the cart wall (server/broadcast.js).
